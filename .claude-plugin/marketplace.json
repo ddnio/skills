@@ -14,7 +14,7 @@
       "source": "./skills/codex-buddy",
       "strict": false,
       "skills": [
-        "./skills/codex-buddy"
+        "./"
       ]
     }
   ]
