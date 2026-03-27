@@ -9,12 +9,10 @@
 | 参数 | 说明 |
 |------|------|
 | `-C, --cd <DIR>` | 工作目录（推荐总是指定） |
-| `-s, --sandbox read-only` | 只读沙盒（默认，推荐） |
-| `-s workspace-write` | 可写工作区（Codex 可修改文件） |
-| `-s danger-full-access` | 无沙盒（危险，慎用） |
+| `-s, --sandbox <MODE>` | 沙盒模式（`<MODE>` 是参数值，不是独立 flag）：`read-only`（默认，推荐）/ `workspace-write`（可修改工作区文件）/ `danger-full-access`（无沙盒，危险）|
 | `--add-dir <PATH>` | 额外授权写入目录（比 danger-full-access 更安全的替代方案） |
 | `--skip-git-repo-check` | 允许在非 Git 目录运行 |
-| `-m, --model <MODEL>` | 指定模型（可选 GPT-5.4, GPT-5.3-Codex 等，以当前可用为准） |
+| `-m, --model <MODEL>` | 指定模型（**默认不传**：省略时沿用当前配置模型，未配置则使用 Codex 推荐默认模型；仅用户明确要求或需复现特定模型行为时才传） |
 | `-p, --profile <NAME>` | 加载 config.toml 中的配置 profile |
 | `-a, --ask-for-approval` | 审批模式：`untrusted`（默认）/ `on-request` / `never` |
 | `--full-auto` | 低摩擦自动模式（等价于 `-a on-request -s workspace-write`） |
@@ -37,6 +35,8 @@
 ## Probe — 独立初判（默认首步）
 
 不传 Claude 结论，让 Codex 独立回答。
+
+> ⚠️ **默认不传 `--model`**：省略时沿用配置模型或 Codex 推荐默认模型。仅在用户明确要求某具体模型，或需复现特定模型行为时才传。
 
 ```bash
 CODEX_BIN="$(command -v codex || true)"

@@ -163,6 +163,18 @@
       "prompt": "帮我优化这个函数，但我没法给你看完整代码，涉及公司机密",
       "expected_output": "回复开头标注 V-level，识别为缺关键输入（missing_input），必须停下问用户如何脱敏后提供代码",
       "tags": ["missing-input", "boundary-stop", "v-level-header"]
+    },
+    {
+      "id": 28,
+      "prompt": "帮我发一个 Probe 给 Codex，任务是判断这段 Go 代码有没有 race condition",
+      "expected_output": "生成的 codex exec 命令不包含 --model 参数；证据包只传代码，不传 Claude 对 race condition 的判断",
+      "tags": ["no-model-flag", "probe-execution", "evidence-packaging"]
+    },
+    {
+      "id": 29,
+      "prompt": "用 Codex 验证这段代码，我想指定用 gpt-5.4 模型",
+      "expected_output": "用户明确要求具体模型，生成的 codex exec 命令包含 --model gpt-5.4；这是唯一允许传 --model 的场景",
+      "tags": ["model-flag-allowed", "probe-execution", "user-explicit-request"]
     }
   ]
 }

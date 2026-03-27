@@ -139,3 +139,4 @@ Codex 没有新发现 → 写 `no-op`，不编造。
 3. 沙盒：默认 `read-only`；升 `workspace-write` 前须告知用户
 4. 前置检查：首次调用前运行 `command -v codex`；失败 → `V{N} | [blocked: codex unavailable]`，指引用户安装，本轮仅给 `[未验证]` 结论
 5. 证据脱敏：传原始证据前去除 secret/token/credential/cookie
+6. 不传 `--model`：生成 codex 命令时默认不加 `--model`；仅用户明确要求某具体模型，或需复现特定模型行为时才传
