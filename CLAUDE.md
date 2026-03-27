@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> AI 代理入口。本仓库是 buddy-skills 插件市场。
+> AI 代理入口。本仓库是 ddnio-skills 插件市场。
 
 ---
 
