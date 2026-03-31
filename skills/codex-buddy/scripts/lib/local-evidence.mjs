@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -7,9 +7,9 @@ import path from 'node:path';
  *
  * checks format:
  *   - "file-exists:<path>"       — check if file exists
- *   - "grep:<pattern>:<file>"    — search for pattern in file
- *   - "test:<command>"           — run a test command
- *   - "lint:<command>"           — run a lint command
+ *   - "grep:<pattern>:<file>"    — search for pattern in file (safe: uses execFileSync)
+ *   - "test:<command>"           — run a test command (TRUST BOUNDARY: executes shell command)
+ *   - "lint:<command>"           — run a lint command (TRUST BOUNDARY: executes shell command)
  *   - "git-diff"                 — show git diff summary
  *   - "git-status"               — show git status
  *
@@ -18,6 +18,10 @@ import path from 'node:path';
 export async function collectEvidence(projectDir, { checks = [] } = {}) {
   const evidence = [];
   let allOk = true;
+
+  if (checks.length === 0) {
+    return { ok: true, evidence, skipped: true };
+  }
 
   for (const check of checks) {
     const [type, ...args] = check.split(':');
@@ -38,10 +42,10 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
         const pattern = args[0];
         const file = args.slice(1).join(':');
         try {
-          const result = execSync(
-            `grep -n "${pattern}" "${file}"`,
-            { cwd: projectDir, encoding: 'utf8', timeout: 10000 }
-          ).trim();
+          // Safe: execFileSync does not invoke a shell
+          const result = execFileSync('grep', ['-n', pattern, file], {
+            cwd: projectDir, encoding: 'utf8', timeout: 10000,
+          }).trim();
           const lineCount = result.split('\n').length;
           evidence.push(`grep: "${pattern}" found ${lineCount} match(es) in ${file}`);
         } catch {
@@ -52,6 +56,8 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
       }
 
       case 'test': {
+        // TRUST BOUNDARY: test commands are provided by SKILL.md (Claude),
+        // which is a trusted source. Arbitrary shell execution is intentional.
         const cmd = args.join(':');
         try {
           execSync(cmd, { cwd: projectDir, encoding: 'utf8', timeout: 60000 });
@@ -64,6 +70,7 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
       }
 
       case 'lint': {
+        // TRUST BOUNDARY: lint commands are provided by SKILL.md (Claude).
         const cmd = args.join(':');
         try {
           execSync(cmd, { cwd: projectDir, encoding: 'utf8', timeout: 30000 });
@@ -77,7 +84,9 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
 
       case 'git-diff': {
         try {
-          const diff = execSync('git diff --stat', { cwd: projectDir, encoding: 'utf8', timeout: 10000 }).trim();
+          const diff = execFileSync('git', ['diff', '--stat'], {
+            cwd: projectDir, encoding: 'utf8', timeout: 10000,
+          }).trim();
           evidence.push(`git-diff: ${diff || 'no changes'}`);
         } catch {
           evidence.push('git-diff: not a git repo or git unavailable');
@@ -87,7 +96,9 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
 
       case 'git-status': {
         try {
-          const status = execSync('git status --short', { cwd: projectDir, encoding: 'utf8', timeout: 10000 }).trim();
+          const status = execFileSync('git', ['status', '--short'], {
+            cwd: projectDir, encoding: 'utf8', timeout: 10000,
+          }).trim();
           evidence.push(`git-status: ${status || 'clean'}`);
         } catch {
           evidence.push('git-status: not a git repo or git unavailable');
@@ -99,10 +110,6 @@ export async function collectEvidence(projectDir, { checks = [] } = {}) {
         evidence.push(`unknown check type: ${type}`);
         allOk = false;
     }
-  }
-
-  if (checks.length === 0) {
-    allOk = true;
   }
 
   return { ok: allOk, evidence };

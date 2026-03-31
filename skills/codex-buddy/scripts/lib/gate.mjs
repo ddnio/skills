@@ -1,12 +1,21 @@
+/**
+ * Floor Rules engine. Checks text content against 3 floor rules.
+ * Returns { triggered: boolean, rule: string|null, match: string|null }
+ *
+ * Rule 1: Destructive/irreversible operations
+ * Rule 2: Approval moments (user asking for confirmation)
+ * Rule 3: Unverified correctness claims (claiming success without evidence)
+ */
+
 const DESTRUCTIVE_PATTERNS = [
   /\brm\s+-rf\b/i,
   /\bDROP\s+(TABLE|COLUMN|DATABASE|INDEX)\b/i,
   /\bgit\s+push\s+--force\b/i,
   /\bgit\s+push\s+-f\b/i,
   /\bgit\s+reset\s+--hard\b/i,
-  /\bdeploy\b/i,
+  /\bdeploy\s+(to|--)\b/i,          // S5: require "deploy to" or "deploy --", not bare "deploy"
   /\bALTER\s+TABLE\b/i,
-  /\bCREATE\s+TABLE\b/i,
+  // I6: CREATE TABLE removed — additive, not destructive per spec §3.2
   /\bchmod\s+[0-7]{3,4}\b/i,
   /\bchown\b/i,
   /\bmigrat(e|ion)\b/i,
@@ -15,7 +24,7 @@ const DESTRUCTIVE_PATTERNS = [
 const APPROVAL_PATTERNS = [
   /能.{0,10}吗[？?]/,
   /可以.{0,10}吗[？?]/,
-  /safe\b/i,
+  /\bsafe\b.*[?？]/i,               // I5: require question mark context
   /确认.{0,10}[？?]/,
   /\bconfirm\b/i,
   /是否可以/,

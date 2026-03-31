@@ -18,18 +18,36 @@
  *   --rule <rule>       — Rule that triggered this route
  *   --level <level>     — V-level (V0-V3)
  *   --turn <n>          — Conversation turn number
+ *   --session-id <id>   — Buddy session ID (reuse for budget tracking)
  */
 
-import { checkCodexAvailable, buildProbeCommand, parseSessionId, saveSession, loadSession } from './lib/codex-adapter.mjs';
+import {
+  checkCodexAvailable, buildProbeArgs, buildResumeArgs, execCodex,
+  parseSessionId, saveSession, loadSession,
+  saveBuddySession, loadBuddySession,
+} from './lib/codex-adapter.mjs';
 import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
 import { appendLog, getBudgetRemaining, BUDGET_LIMIT } from './lib/audit.mjs';
-import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 const LOG_FILE = path.join(process.env.HOME || '/tmp', '.buddy', 'logs.jsonl');
+
+/**
+ * Get or create a persistent buddy session ID for budget tracking.
+ * Unlike Codex session IDs (per-probe), this persists across all calls
+ * in one Claude session, ensuring the 4-call budget is enforced.
+ */
+function getOrCreateBuddySessionId(argsSessionId) {
+  if (argsSessionId) return argsSessionId;
+  const existing = loadBuddySession();
+  if (existing) return existing;
+  const newId = `buddy-${crypto.randomUUID().slice(0, 8)}`;
+  saveBuddySession(newId);
+  return newId;
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -48,12 +66,13 @@ function output(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 }
 
-async function actionPreflight(args) {
+async function actionPreflight(_args) {
   const codexAvailable = checkCodexAvailable();
+  const buddySessionId = loadBuddySession();
   output({
     status: codexAvailable ? 'ok' : 'error',
     codex_available: codexAvailable,
-    budget_remaining: getBudgetRemaining(LOG_FILE, 'current'),
+    budget_remaining: buddySessionId ? getBudgetRemaining(LOG_FILE, buddySessionId) : BUDGET_LIMIT,
     message: codexAvailable ? 'Codex CLI ready' : 'Codex CLI not found. Install: npm i -g @openai/codex',
   });
 }
@@ -62,6 +81,21 @@ async function actionLocal(args) {
   const startTime = Date.now();
   const checks = (args.checks || '').split(',').filter(Boolean);
   const result = await collectEvidence(args['project-dir'], { checks });
+
+  // S4: empty checks = skipped, not verified
+  if (result.skipped) {
+    output({
+      status: 'skipped',
+      rule: 'none',
+      route: 'local',
+      evidence_summary: [],
+      conclusion: 'skipped',
+      message: 'No checks provided',
+    });
+    return;
+  }
+
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
 
   const envelope = createEnvelope({
     turn: parseInt(args.turn) || 0,
@@ -72,9 +106,8 @@ async function actionLocal(args) {
     conclusion: result.ok ? 'proceed' : 'needs-evidence',
   });
 
-  const sessionId = args['session-id'] || `local-${crypto.randomUUID().slice(0, 8)}`;
   const latencyMs = Date.now() - startTime;
-  appendLog(LOG_FILE, envelope, sessionId, args['project-dir'], latencyMs);
+  appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
 
   output({
     status: result.ok ? 'verified' : 'blocked',
@@ -83,16 +116,16 @@ async function actionLocal(args) {
     evidence_summary: result.evidence,
     conclusion: envelope.conclusion,
     unverified: envelope.unverified,
-    session_id: sessionId,
+    session_id: buddySessionId,
     call_count: 0,
-    budget_remaining: getBudgetRemaining(LOG_FILE, sessionId),
+    budget_remaining: getBudgetRemaining(LOG_FILE, buddySessionId),
   });
 }
 
 async function actionProbe(args) {
   const startTime = Date.now();
-  const sessionId = args['session-id'] || `probe-${crypto.randomUUID().slice(0, 8)}`;
-  const budget = getBudgetRemaining(LOG_FILE, sessionId);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const budget = getBudgetRemaining(LOG_FILE, buddySessionId);
 
   if (budget <= 0) {
     output({ status: 'blocked', rule: 'budget-exceeded', budget_remaining: 0 });
@@ -113,14 +146,15 @@ async function actionProbe(args) {
   const prompt = fs.readFileSync(evidenceFile, 'utf8');
   const outputFile = `/tmp/buddy-codex-${Date.now()}.txt`;
 
-  const cmd = buildProbeCommand({
+  const cmdSpec = buildProbeArgs({
     projectDir: args['project-dir'],
     outputFile,
     prompt,
   });
 
   try {
-    const execOutput = execSync(cmd, { encoding: 'utf8', timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'] });
+    // C1 fix: use execCodex (execFileSync) instead of execSync with string
+    const execOutput = execCodex(cmdSpec, { stdio: ['pipe', 'pipe', 'pipe'] });
     const codexSessionId = parseSessionId(execOutput);
     if (codexSessionId) saveSession(codexSessionId);
 
@@ -131,12 +165,14 @@ async function actionProbe(args) {
       level: args.level || 'V2',
       rule: args.rule || 'vlevel:V2',
       route: 'codex',
-      evidence: [`codex: ${codexResult.slice(0, 200)}...`],
-      conclusion: 'proceed',
+      // S1: increase truncation to 1000 chars
+      evidence: [`codex: ${codexResult.slice(0, 1000)}`],
+      // I1 fix: don't hardcode 'proceed' — let SKILL.md judge
+      conclusion: 'needs-review',
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(LOG_FILE, envelope, sessionId, args['project-dir'], latencyMs);
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
 
     output({
       status: 'verified',
@@ -146,29 +182,86 @@ async function actionProbe(args) {
       codex_output_file: outputFile,
       conclusion: envelope.conclusion,
       unverified: envelope.unverified,
-      session_id: codexSessionId || sessionId,
-      call_count: BUDGET_LIMIT - getBudgetRemaining(LOG_FILE, sessionId),
-      budget_remaining: getBudgetRemaining(LOG_FILE, sessionId),
+      session_id: buddySessionId,
+      codex_session_id: codexSessionId,
+      call_count: BUDGET_LIMIT - getBudgetRemaining(LOG_FILE, buddySessionId),
+      budget_remaining: getBudgetRemaining(LOG_FILE, buddySessionId),
     });
   } catch (e) {
     output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile });
   }
 }
 
+// I3 fix: implement followup using buildResumeArgs + execCodex
 async function actionFollowup(args) {
-  const sessionId = args['session-id'] || loadSession();
-  if (!sessionId) {
-    output({ status: 'error', message: 'No session ID available for follow-up' });
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const codexSessionId = args['codex-session-id'] || loadSession();
+
+  if (!codexSessionId) {
+    output({ status: 'error', message: 'No Codex session ID available for follow-up. Run probe first.' });
     return;
   }
 
-  const budget = getBudgetRemaining(LOG_FILE, sessionId);
+  const budget = getBudgetRemaining(LOG_FILE, buddySessionId);
   if (budget <= 0) {
     output({ status: 'blocked', rule: 'budget-exceeded', budget_remaining: 0 });
     return;
   }
 
-  output({ status: 'error', message: 'followup action: use probe with --session-id for now' });
+  if (!checkCodexAvailable()) {
+    output({ status: 'error', rule: 'codex-unavailable', message: 'Codex CLI not found' });
+    return;
+  }
+
+  const evidenceFile = args.evidence;
+  if (!evidenceFile || !fs.existsSync(evidenceFile)) {
+    output({ status: 'error', message: `Evidence file not found: ${evidenceFile}` });
+    return;
+  }
+
+  const prompt = fs.readFileSync(evidenceFile, 'utf8');
+  const outputFile = `/tmp/buddy-codex-followup-${Date.now()}.txt`;
+  const startTime = Date.now();
+
+  const cmdSpec = buildResumeArgs({
+    sessionId: codexSessionId,
+    outputFile,
+    prompt,
+  });
+
+  try {
+    execCodex(cmdSpec, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    const codexResult = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
+
+    const envelope = createEnvelope({
+      turn: parseInt(args.turn) || 0,
+      level: args.level || 'V2',
+      rule: args.rule || 'vlevel:V2',
+      route: 'codex',
+      evidence: [`codex-followup: ${codexResult.slice(0, 1000)}`],
+      conclusion: 'needs-review',
+    });
+
+    const latencyMs = Date.now() - startTime;
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+
+    output({
+      status: 'verified',
+      rule: envelope.rule,
+      route: 'codex',
+      evidence_summary: envelope.evidence,
+      codex_output_file: outputFile,
+      conclusion: envelope.conclusion,
+      unverified: envelope.unverified,
+      session_id: buddySessionId,
+      codex_session_id: codexSessionId,
+      call_count: BUDGET_LIMIT - getBudgetRemaining(LOG_FILE, buddySessionId),
+      budget_remaining: getBudgetRemaining(LOG_FILE, buddySessionId),
+    });
+  } catch (e) {
+    output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile });
+  }
 }
 
 async function main() {
