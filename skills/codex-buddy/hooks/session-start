@@ -9,6 +9,15 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Read SKILL.md content
 skill_content=$(cat "${PLUGIN_ROOT}/SKILL.md" 2>&1 || echo "Error reading codex-buddy SKILL.md")
 
+# Run preflight check
+preflight_result=""
+if [ -x "$(command -v node)" ]; then
+  preflight_result=$(node "${PLUGIN_ROOT}/scripts/buddy-runtime.mjs" --action preflight 2>/dev/null || echo '{"status":"error","message":"preflight failed"}')
+fi
+
+# Initialize audit log directory
+mkdir -p "${HOME}/.buddy"
+
 # Escape string for JSON embedding
 escape_for_json() {
     local s="$1"
@@ -21,7 +30,8 @@ escape_for_json() {
 }
 
 skill_escaped=$(escape_for_json "$skill_content")
-session_context="<EXTREMELY_IMPORTANT>\ncodex-buddy verification policy is now active for this session.\n\n**Below is the full content of your 'codex-buddy' skill. Follow it for every turn in this conversation:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+preflight_escaped=$(escape_for_json "$preflight_result")
+session_context="<EXTREMELY_IMPORTANT>\ncodex-buddy verification policy is now active for this session.\nPreflight: ${preflight_escaped}\n\n**Below is the full content of your 'codex-buddy' skill. Follow it for every turn in this conversation:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
 
 # Output context injection
 if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
