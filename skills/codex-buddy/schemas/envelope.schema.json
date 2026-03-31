@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://buddy.ddnio.com/schemas/envelope.schema.json",
+  "title": "Buddy Decision Envelope",
+  "description": "JSON Schema for buddy v3 verification decision records",
+  "type": "object",
+  "required": [
+    "turn",
+    "level",
+    "rule",
+    "triggered",
+    "route",
+    "evidence",
+    "conclusion"
+  ],
+  "properties": {
+    "turn": {
+      "type": "integer",
+      "description": "Turn number in the verification sequence",
+      "minimum": 0
+    },
+    "level": {
+      "type": "string",
+      "enum": ["V0", "V1", "V2", "V3"],
+      "description": "Verification level"
+    },
+    "rule": {
+      "type": "string",
+      "description": "Name or identifier of the verification rule applied"
+    },
+    "triggered": {
+      "type": "boolean",
+      "description": "Whether the rule was triggered in this turn"
+    },
+    "route": {
+      "type": "string",
+      "enum": ["local", "codex", "both"],
+      "description": "Verification routing decision"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Array of evidence items supporting the decision"
+    },
+    "conclusion": {
+      "type": "string",
+      "enum": ["proceed", "stop", "needs-evidence"],
+      "description": "Decision outcome"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "Confidence level in the decision (optional)"
+    },
+    "unverified": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Array of items that remain unverified (optional)"
+    }
+  },
+  "additionalProperties": false
+}
