@@ -41,7 +41,7 @@ export function buildResumeArgs({ sessionId, outputFile, prompt }) {
  * responses but prevents indefinite hangs from stuck processes.
  * Returns a Promise that resolves to stdout string.
  */
-const DEFAULT_WATCHDOG_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_WATCHDOG_MS = 10 * 60 * 1000; // 10 minutes — complex probes with project reading can take 5min+
 
 export function execCodex({ bin, args }, options = {}) {
   const watchdogMs = options.timeout ?? DEFAULT_WATCHDOG_MS;
