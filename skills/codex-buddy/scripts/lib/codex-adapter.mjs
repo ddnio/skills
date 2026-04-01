@@ -50,6 +50,9 @@ export function execCodex({ bin, args }, options = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    // Close stdin immediately so Codex doesn't wait for additional input
+    child.stdin.end();
+
     let stdout = '';
     let stderr = '';
     let killed = false;
