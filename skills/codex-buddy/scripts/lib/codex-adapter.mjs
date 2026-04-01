@@ -11,6 +11,7 @@ export function buildProbeArgs({ projectDir, outputFile, prompt, json = false, o
     '-C', projectDir,
     '-s', sandbox,
     '--skip-git-repo-check',
+    '-c', 'mcp_servers={}',  // Skip MCP server init for faster startup
     '-o', outputFile,
   ];
 
@@ -30,7 +31,7 @@ export function buildProbeArgs({ projectDir, outputFile, prompt, json = false, o
 export function buildResumeArgs({ sessionId, outputFile, prompt }) {
   return {
     bin: 'codex',
-    args: ['exec', 'resume', sessionId, '-o', outputFile, prompt],
+    args: ['exec', 'resume', sessionId, '-c', 'mcp_servers={}', '-o', outputFile, prompt],
   };
 }
 
