@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.0.1
+v3.0.2
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -41,13 +41,22 @@ NONE
   done_when: "hooks.json includes PreToolUse matcher; hook intercepts rm -rf and injects advisory reminder"
   status: open
 
+- id: W-016
+  type: improve
+  title: Codex protocol communication performance optimization
+  source: user feedback (2026-04-01)
+  impact: high
+  reversibility: safe
+  done_when: "codex-adapter.mjs uses -a never before exec, --ephemeral for probes, trimPrompt caps at 12000 chars; smoke test passes"
+  status: done
+
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
-W-014
+W-015
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-v3.0 just shipped — runtime validation is the immediate priority
+W-016 (perf optimization) completed; W-015 is the next open item
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->

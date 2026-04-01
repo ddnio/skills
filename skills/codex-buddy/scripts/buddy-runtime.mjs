@@ -120,7 +120,6 @@ async function actionLocal(args) {
     conclusion: envelope.conclusion,
     unverified: envelope.unverified,
     session_id: buddySessionId,
-    call_count: 0,
     call_count: getCallCount(LOG_FILE, buddySessionId),
   });
 }
@@ -142,16 +141,24 @@ async function actionProbe(args) {
   const prompt = fs.readFileSync(evidenceFile, 'utf8');
   const outputFile = `/tmp/buddy-codex-${Date.now()}.txt`;
 
+  const ephemeral = args.ephemeral !== 'false'; // default true
   const cmdSpec = buildProbeArgs({
     projectDir: args['project-dir'],
     outputFile,
     prompt,
+    model: args.model || null,
+    ephemeral,
   });
 
   try {
     const execOutput = await execCodex(cmdSpec);
-    const codexSessionId = parseSessionId(execOutput);
-    if (codexSessionId) saveSession(codexSessionId);
+    const codexSessionId = ephemeral ? null : parseSessionId(execOutput);
+    if (codexSessionId) {
+      saveSession(codexSessionId);
+    } else if (ephemeral) {
+      // Clear stale session so follow-up can't accidentally resume an old one
+      saveSession('');
+    }
 
     const codexResult = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
 
@@ -177,6 +184,8 @@ async function actionProbe(args) {
       unverified: envelope.unverified,
       session_id: buddySessionId,
       codex_session_id: codexSessionId,
+      ephemeral,
+      followup_available: !ephemeral && !!codexSessionId,
       call_count: getCallCount(LOG_FILE, buddySessionId),
     });
   } catch (e) {
@@ -190,7 +199,7 @@ async function actionFollowup(args) {
   const codexSessionId = args['codex-session-id'] || loadSession();
 
   if (!codexSessionId) {
-    output({ status: 'error', message: 'No Codex session ID available for follow-up. Run probe first.' });
+    output({ status: 'error', message: 'No Codex session ID available for follow-up. Run probe with --ephemeral false first.' });
     return;
   }
 

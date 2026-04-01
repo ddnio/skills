@@ -1,37 +1,62 @@
 import { execSync, spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
 
+/** Max prompt size sent to Codex (chars). Larger prompts slow inference significantly. */
+const MAX_PROMPT_CHARS = 12000;
+
+/**
+ * Trim prompt to MAX_PROMPT_CHARS by cutting the middle.
+ * Keeps the beginning (task description) and end ([omissions] etc.) intact.
+ */
+export function trimPrompt(prompt, maxChars = MAX_PROMPT_CHARS) {
+  if (prompt.length <= maxChars) return prompt;
+  const cutNote = '\n\n[... 证据已裁剪，原文过长 ...]\n\n';
+  const keepEnd = Math.min(800, Math.floor(maxChars * 0.15));
+  const keepStart = Math.max(200, maxChars - keepEnd - cutNote.length);
+  return prompt.slice(0, keepStart) + cutNote + prompt.slice(-keepEnd);
+}
+
 /**
  * Build args array for `codex exec` probe.
  * Returns { bin, args } for use with spawn (no shell interpretation).
+ *
+ * Key perf flags (confirmed with Codex CLI 0.118.0):
+ *   -a never      — top-level flag, skip approval (safe in read-only sandbox)
+ *   --ephemeral   — skip session file persistence (no resume, but faster)
+ *   -c mcp_servers={} — skip MCP server init
  */
-export function buildProbeArgs({ projectDir, outputFile, prompt, json = false, outputSchema = null, sandbox = 'read-only' }) {
+export function buildProbeArgs({ projectDir, outputFile, prompt, json = false, outputSchema = null, sandbox = 'read-only', model = null, ephemeral = true }) {
+  const trimmed = trimPrompt(prompt);
+  // -a is a TOP-LEVEL flag, must come BEFORE the 'exec' subcommand
   const args = [
+    '-a', 'never',
     'exec',
     '-C', projectDir,
     '-s', sandbox,
     '--skip-git-repo-check',
-    '-c', 'mcp_servers={}',  // Skip MCP server init for faster startup
+    '-c', 'mcp_servers={}',
     '-o', outputFile,
   ];
 
+  if (ephemeral) args.splice(args.indexOf('exec') + 1, 0, '--ephemeral');
+  if (model) args.splice(args.indexOf('exec'), 0, '-m', model);
   if (json) args.push('--json');
   if (outputSchema) args.push('--output-schema', outputSchema);
 
-  // Prompt goes last as a single argument — no shell escaping needed
-  args.push(prompt);
+  args.push(trimmed);
 
   return { bin: 'codex', args };
 }
 
 /**
  * Build args array for `codex exec resume` (follow-up/challenge).
- * Returns { bin, args } for use with spawn.
+ * -a never at top level for consistency. No --ephemeral (needs persisted session).
  */
 export function buildResumeArgs({ sessionId, outputFile, prompt }) {
+  const trimmed = trimPrompt(prompt);
   return {
     bin: 'codex',
-    args: ['exec', 'resume', sessionId, '-c', 'mcp_servers={}', '-o', outputFile, prompt],
+    args: ['-a', 'never', 'exec', 'resume', sessionId, '-c', 'mcp_servers={}', '-o', outputFile, trimmed],
   };
 }
 

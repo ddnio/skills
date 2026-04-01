@@ -4,6 +4,24 @@
 
 ---
 
+## v3.0.2 — 2026-04-01 Protocol Communication Performance
+
+### Content
+- **Perf: `-a never` before `exec`** — approval flag is top-level, was previously missing. Eliminates approval overhead in read-only sandbox.
+- **Perf: `--ephemeral` for probes** — skip session file persistence for one-shot probes (default on). Follow-up probes still persist sessions.
+- **Perf: prompt trimming** — new `trimPrompt()` caps evidence at 12000 chars, preserving task/omissions structure. Large prompts are the main cause of slow Codex inference.
+- **Perf: `-a never` for resume** — follow-up calls also skip approval.
+- **Fix: duplicate `call_count`** — buddy-runtime.mjs had duplicate key in local action output.
+- **Docs: cli-examples.md** — updated parameter table with perf flags, correct `-a` position, recommended fast combinations.
+
+### Codex Interaction
+- Probe: Asked Codex about CLI-side acceleration flags (7 questions)
+- Key finding: 30-80s latency is primarily model inference, not CLI startup. `-a never` and `--ephemeral` provide marginal but real improvement.
+- Codex confirmed: no `--no-project-doc` flag exists in 0.118.0; `-C` to smaller directory is the only way to reduce project doc scanning
+- Codex suggested: `codex-mini-latest` model for faster inference, long-lived process architecture for fundamental speedup
+
+---
+
 ## v3.0.1 — 2026-04-01 E2E Validation + Bug Fixes
 
 ### Content
