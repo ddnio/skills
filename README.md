@@ -21,15 +21,15 @@ Single AI models fail silently by rationalizing errors fluently. These skills br
 ### Claude Code (Plugin Marketplace)
 
 ```bash
-/plugin marketplace add ddnio/skills
-/plugin install codex-buddy@ddnio-skills
+/plugin marketplace add nana-fox/skills
+/plugin install codex-buddy@nanafox-skills
 ```
 
 ### Manual Installation
 
 ```bash
 # Clone the repo
-git clone https://github.com/ddnio/skills.git
+git clone https://github.com/nana-fox/skills.git
 cd skills
 
 # Option 1: Symlink (auto-updates on git pull)
