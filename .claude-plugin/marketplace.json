@@ -15,7 +15,7 @@
     },
     {
       "name": "nana",
-      "description": "Session handoff for Claude Code. Save context before closing a session, restore it in a new session with structured 3-layer recovery protocol.",
+      "description": "Session handoff for Claude Code. Use /nana:save to snapshot context before closing, /nana:load to restore in a new session.",
       "source": "./skills/nana"
     }
   ]
