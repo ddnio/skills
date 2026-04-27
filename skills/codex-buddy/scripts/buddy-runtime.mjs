@@ -28,7 +28,8 @@ import {
 } from './lib/codex-adapter.mjs';
 import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
-import { appendLog, getCallCount } from './lib/audit.mjs';
+import { appendLog, getCallCount, annotateLastEntry } from './lib/audit.mjs';
+import { getStats } from './lib/metrics.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -110,7 +111,7 @@ async function actionLocal(args) {
   });
 
   const latencyMs = Date.now() - startTime;
-  appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+  appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'local' });
 
   output({
     status: result.ok ? 'verified' : 'blocked',
@@ -172,7 +173,7 @@ async function actionProbe(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'probe' });
 
     output({
       status: 'verified',
@@ -239,7 +240,7 @@ async function actionFollowup(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'followup' });
 
     output({
       status: 'verified',
@@ -258,15 +259,40 @@ async function actionFollowup(args) {
   }
 }
 
+// Annotate the most recent log entry for a session with probe_found_new / user_adopted.
+// Claude calls this after synthesizing Codex output to record post-hoc metrics.
+async function actionAnnotate(args) {
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const fields = {};
+  if (args['probe-found-new'] !== undefined) {
+    fields.probe_found_new = args['probe-found-new'] === 'true';
+  }
+  if (args['user-adopted'] !== undefined) {
+    fields.user_adopted = args['user-adopted'] === 'true';
+  }
+  if (!Object.keys(fields).length) {
+    output({ status: 'error', message: 'No fields to annotate. Use --probe-found-new and/or --user-adopted.' });
+    return;
+  }
+  const ok = annotateLastEntry(LOG_FILE, buddySessionId, fields);
+  output({ status: ok ? 'ok' : 'error', session_id: buddySessionId, annotated: fields,
+           message: ok ? 'Annotated last entry' : 'No log entry found for session' });
+}
+
+async function actionMetrics(args) {
+  const stats = getStats(LOG_FILE, args['session-id'] || null);
+  output({ status: 'ok', ...stats });
+}
+
 async function main() {
   const args = parseArgs(process.argv);
 
-  if (!args['project-dir'] && args.action !== 'preflight') {
+  const noProjectDirActions = ['preflight', 'annotate', 'metrics'];
+  if (!args['project-dir'] && !noProjectDirActions.includes(args.action)) {
     output({ status: 'error', message: 'Missing required --project-dir' });
     return;
   }
-
-  if (!args['project-dir'] && args.action === 'preflight') {
+  if (!args['project-dir']) {
     args['project-dir'] = process.cwd();
   }
 
@@ -282,6 +308,12 @@ async function main() {
       break;
     case 'followup':
       await actionFollowup(args);
+      break;
+    case 'annotate':
+      await actionAnnotate(args);
+      break;
+    case 'metrics':
+      await actionMetrics(args);
       break;
     default:
       output({ status: 'error', message: `Unknown action: ${args.action}` });
