@@ -70,6 +70,19 @@ export function buildResumeArgs({ sessionId, outputFile, prompt }) {
 const DEFAULT_WATCHDOG_MS = 10 * 60 * 1000; // 10 minutes — complex probes with project reading can take 5min+
 
 export function execCodex({ bin, args }, options = {}) {
+  // Test-only stub: short-circuit codex execution. Used by stderr/UX tests
+  // to avoid spawning real codex (30-80s) in CI.
+  if (process.env.BUDDY_STUB_CODEX === '1') {
+    const mock = process.env.BUDDY_STUB_OUTPUT
+      || '{"verdict":"proceed","findings":[],"questions":[]}';
+    // Honor outputFile arg pattern (`-o <file>`) so callers reading the file see mock.
+    const idx = args.indexOf('-o');
+    if (idx >= 0 && args[idx + 1]) {
+      try { fs.writeFileSync(args[idx + 1], mock); } catch {}
+    }
+    return Promise.resolve(mock);
+  }
+
   const watchdogMs = options.timeout ?? DEFAULT_WATCHDOG_MS;
 
   return new Promise((resolve, reject) => {

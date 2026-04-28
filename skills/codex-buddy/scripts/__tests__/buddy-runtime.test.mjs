@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -183,6 +183,30 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     assert.equal(json.events_count, 1);
     assert.equal(json.events[0].event, 'probe.synthesis');
     fs.rmSync(`${process.env.HOME}/.buddy/sessions/${sid}.jsonl`, { force: true });
+  });
+
+  test('--action probe with BUDDY_STUB_CODEX=1 emits stderr progress lines', () => {
+    const evidence = path.join(os.tmpdir(), `w3-evidence-${Date.now()}.txt`);
+    fs.writeFileSync(evidence, 'task_to_judge: stub\nraw_evidence: x\nknown_omissions: none\n');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-w3-'));
+    let stdout = '', stderr = '';
+    try {
+      const r = spawnSync(
+        'node',
+        [RUNTIME, '--action', 'probe', '--evidence', evidence, '--project-dir', '/tmp'],
+        { encoding: 'utf8', timeout: 15000,
+          env: { ...process.env, BUDDY_STUB_CODEX: '1', BUDDY_HOME: tmpHome } }
+      );
+      stdout = r.stdout || ''; stderr = r.stderr || '';
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+    assert.match(stderr, /\[buddy\] probe started/);
+    assert.match(stderr, /\[buddy\] probe completed in \d+ms/);
+    const json = JSON.parse(stdout);
+    assert.equal(json.status, 'verified');
+    assert.equal(json.structured?.verdict, 'proceed');
   });
 
   test('--action probe with neither --evidence nor --evidence-stdin returns error', () => {

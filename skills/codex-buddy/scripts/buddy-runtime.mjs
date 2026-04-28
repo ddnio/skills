@@ -241,6 +241,9 @@ async function actionProbe(args) {
             outputSchema: schemaFile,
           }));
 
+  const runtimeLabel = useAppServer ? 'app-server' : 'exec';
+  process.stderr.write(`[buddy] probe started, runtime=${runtimeLabel}, sid=${buddySessionId}, ETA 30-80s\n`);
+
   try {
     const probeStartTime = startTime;
     let codexSessionId;
@@ -304,6 +307,8 @@ async function actionProbe(args) {
       followup_recommended: followupRecommended,
       codex_output_file: outputFile,
     }, codexResult);
+
+    process.stderr.write(`[buddy] probe completed in ${latencyMs}ms, verdict=${parsed.data?.verdict || parsed.mode}\n`);
 
     output({
       status: 'verified',
@@ -389,6 +394,7 @@ async function actionFollowup(args) {
   const outputFile = `/tmp/buddy-codex-followup-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`;
   const startTime = Date.now();
   const verificationTaskId = args['verification-task-id'] || newVerificationTaskId();
+  process.stderr.write(`[buddy] followup started, sid=${buddySessionId}, codex_session=${codexSessionId.slice(0, 8)}, ETA 30-80s\n`);
   appendSessionEvent(buddySessionId, verificationTaskId, 'followup.start', {
     evidence_source: ev.source,
     codex_session_id: codexSessionId,
@@ -422,6 +428,8 @@ async function actionFollowup(args) {
       latency_ms: latencyMs,
       codex_output_file: outputFile,
     }, codexResult);
+
+    process.stderr.write(`[buddy] followup completed in ${latencyMs}ms\n`);
 
     output({
       status: 'verified',
