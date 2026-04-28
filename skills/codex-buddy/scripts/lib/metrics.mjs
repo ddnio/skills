@@ -14,9 +14,17 @@ export function getStats(logFile = DEFAULT_LOG, sessionId = null) {
   const entries = lines.map(l => JSON.parse(l))
     .filter(e => !sessionId || e.session_id === sessionId);
 
-  const probes    = entries.filter(e => e.action === 'probe');
-  const followups = entries.filter(e => e.action === 'followup');
-  const locals    = entries.filter(e => e.action === 'local');
+  // Infer action from route for legacy entries written before P0 added the action field.
+  function resolveAction(e) {
+    if (e.action) return e.action;
+    if (e.route === 'local') return 'local';
+    if (e.route === 'codex') return 'probe'; // pre-P0 codex calls were all probes
+    return null;
+  }
+
+  const probes    = entries.filter(e => resolveAction(e) === 'probe');
+  const followups = entries.filter(e => resolveAction(e) === 'followup');
+  const locals    = entries.filter(e => resolveAction(e) === 'local');
 
   const withLatency = entries.filter(e => e.latency_ms !== undefined);
   const avg_latency_ms = withLatency.length
