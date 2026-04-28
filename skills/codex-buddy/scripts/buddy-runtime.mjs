@@ -334,13 +334,43 @@ async function actionProbe(args) {
   }
 }
 
+// Look up the codex_session_id of a specific verification task from session log,
+// avoiding the global ~/.buddy/session.json pointer (which can be overwritten by
+// any concurrent probe and link followup to the wrong session).
+function lookupCodexSessionByTaskId(buddySessionId, verificationTaskId) {
+  if (!verificationTaskId) return null;
+  const events = readSessionEvents(buddySessionId);
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if ((e.event === 'probe.codex_output' || e.event === 'followup.codex_output')
+        && e.verification_task_id === verificationTaskId
+        && e.codex_session_id) {
+      return e.codex_session_id;
+    }
+  }
+  return null;
+}
+
 // I3 fix: implement followup using buildResumeArgs + execCodex
 async function actionFollowup(args) {
   const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
-  const codexSessionId = args['codex-session-id'] || loadSession();
+  // Resolution order (most specific → least, to avoid global session.json overwrite race):
+  //   1. --codex-session-id (explicit)
+  //   2. --verification-task-id → look up codex_session_id from session log
+  //   3. loadSession() global last pointer (deprecated; warns)
+  let codexSessionId = args['codex-session-id'] || null;
+  if (!codexSessionId && args['verification-task-id']) {
+    codexSessionId = lookupCodexSessionByTaskId(buddySessionId, args['verification-task-id']);
+  }
+  if (!codexSessionId) {
+    codexSessionId = loadSession();
+    if (codexSessionId) {
+      process.stderr.write('[buddy-runtime] Warning: using global ~/.buddy/session.json pointer; pass --verification-task-id or --codex-session-id to disambiguate.\n');
+    }
+  }
 
   if (!codexSessionId) {
-    output({ status: 'error', message: 'No Codex session ID available for follow-up. Run probe with --ephemeral false first.' });
+    output({ status: 'error', message: 'No Codex session ID available for follow-up. Pass --verification-task-id <id> or --codex-session-id <id>, or run probe with --ephemeral false first.' });
     return;
   }
 
