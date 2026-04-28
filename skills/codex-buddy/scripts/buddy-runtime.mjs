@@ -431,7 +431,20 @@ async function actionAnnotate(args) {
   }
   const ok = annotateLastEntry(LOG_FILE, buddySessionId, fields);
   if (ok) {
-    appendSessionEvent(buddySessionId, args['verification-task-id'] || 'unknown', 'annotate', fields);
+    // Default verification_task_id: pick the latest probe.codex_output / followup.codex_output
+    // from this buddy session's log, so annotate is properly linked to the probe it annotates.
+    let taskId = args['verification-task-id'];
+    if (!taskId) {
+      const events = readSessionEvents(buddySessionId);
+      for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i];
+        if (e.event === 'probe.codex_output' || e.event === 'followup.codex_output') {
+          taskId = e.verification_task_id;
+          break;
+        }
+      }
+    }
+    appendSessionEvent(buddySessionId, taskId || 'unknown', 'annotate', fields);
   }
   output({ status: ok ? 'ok' : 'error', session_id: buddySessionId, annotated: fields,
            message: ok ? 'Annotated last entry' : 'No log entry found for session' });
