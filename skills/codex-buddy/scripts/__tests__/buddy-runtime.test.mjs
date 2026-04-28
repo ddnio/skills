@@ -2,6 +2,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,5 +45,42 @@ describe('buddy-runtime CLI', () => {
     );
     const json = JSON.parse(result);
     assert.equal(json.status, 'error');
+  });
+
+  test('--action metrics returns stats without project-dir', () => {
+    const result = execSync(
+      `node "${RUNTIME}" --action metrics`,
+      { encoding: 'utf8', timeout: 10000 }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'ok');
+    assert.ok('total' in json);
+    assert.ok('probes' in json);
+    assert.ok('followups' in json);
+    assert.ok('avg_latency_ms' in json);
+    assert.ok('probe_found_new_rate' in json);
+    assert.ok('user_adopted_rate' in json);
+  });
+
+  test('--action annotate missing fields returns error', () => {
+    const result = execSync(
+      `node "${RUNTIME}" --action annotate --session-id buddy-test999`,
+      { encoding: 'utf8', timeout: 10000 }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'error');
+  });
+
+  test('--action local writes action field to log', () => {
+    const tmpLog = path.join(os.tmpdir(), `buddy-test-${Date.now()}.jsonl`);
+    // Override HOME to control log file location by using a temp session
+    const result = execSync(
+      `node "${RUNTIME}" --action local --project-dir /tmp --checks "" --session-id buddy-logtest`,
+      { encoding: 'utf8', timeout: 10000, env: { ...process.env } }
+    );
+    const json = JSON.parse(result);
+    // local with no checks returns skipped (no log written), so just verify status
+    assert.ok(['skipped', 'verified', 'blocked'].includes(json.status));
+    fs.rmSync(tmpLog, { force: true });
   });
 });

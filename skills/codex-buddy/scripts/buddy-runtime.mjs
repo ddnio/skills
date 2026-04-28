@@ -28,12 +28,38 @@ import {
 } from './lib/codex-adapter.mjs';
 import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
-import { appendLog, getCallCount } from './lib/audit.mjs';
+import { appendLog, getCallCount, annotateLastEntry } from './lib/audit.mjs';
+import { getStats } from './lib/metrics.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOG_FILE = path.join(process.env.HOME || '/tmp', '.buddy', 'logs.jsonl');
+const CODEX_OUTPUT_SCHEMA = path.join(__dirname, '..', 'schemas', 'codex-output.schema.json');
+
+// Parse Codex output: try structured JSON first, fallback to unstructured text.
+function parseCodexOutput(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && parsed.verdict && Array.isArray(parsed.findings)) {
+      return { mode: 'structured', data: parsed };
+    }
+  } catch { /* fallback */ }
+  return { mode: 'unstructured', data: null };
+}
+
+// Detect whether Codex output contains open questions needing follow-up.
+function hasQuestions(parsed, rawText) {
+  if (parsed.mode === 'structured') {
+    return Array.isArray(parsed.data?.questions) && parsed.data.questions.length > 0;
+  }
+  // Unstructured: count question-mark lines that look like natural language questions.
+  const lines = rawText.split('\n');
+  const questionLines = lines.filter(l => /\?/.test(l) && /[a-zA-Z一-鿿]{4,}/.test(l));
+  return questionLines.length >= 2;
+}
 
 /**
  * Get or create a persistent buddy session ID for audit tracking.
@@ -110,7 +136,7 @@ async function actionLocal(args) {
   });
 
   const latencyMs = Date.now() - startTime;
-  appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+  appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'local' });
 
   output({
     status: result.ok ? 'verified' : 'blocked',
@@ -142,12 +168,14 @@ async function actionProbe(args) {
   const outputFile = `/tmp/buddy-codex-${Date.now()}.txt`;
 
   const ephemeral = args.ephemeral !== 'false'; // default true
+  const schemaFile = fs.existsSync(CODEX_OUTPUT_SCHEMA) ? CODEX_OUTPUT_SCHEMA : null;
   const cmdSpec = buildProbeArgs({
     projectDir: args['project-dir'],
     outputFile,
     prompt,
     model: args.model || null,
     ephemeral,
+    outputSchema: schemaFile,
   });
 
   try {
@@ -161,6 +189,8 @@ async function actionProbe(args) {
     }
 
     const codexResult = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
+    const parsed = parseCodexOutput(codexResult);
+    const followupRecommended = hasQuestions(parsed, codexResult);
 
     const envelope = createEnvelope({
       turn: parseInt(args.turn) || 0,
@@ -172,7 +202,7 @@ async function actionProbe(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'probe' });
 
     output({
       status: 'verified',
@@ -186,7 +216,10 @@ async function actionProbe(args) {
       codex_session_id: codexSessionId,
       ephemeral,
       followup_available: !ephemeral && !!codexSessionId,
+      followup_recommended: followupRecommended,
       call_count: getCallCount(LOG_FILE, buddySessionId),
+      parse_mode: parsed.mode,
+      structured: parsed.data,
     });
   } catch (e) {
     output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile });
@@ -239,7 +272,7 @@ async function actionFollowup(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs);
+    appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'followup' });
 
     output({
       status: 'verified',
@@ -258,15 +291,40 @@ async function actionFollowup(args) {
   }
 }
 
+// Annotate the most recent log entry for a session with probe_found_new / user_adopted.
+// Claude calls this after synthesizing Codex output to record post-hoc metrics.
+async function actionAnnotate(args) {
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const fields = {};
+  if (args['probe-found-new'] !== undefined) {
+    fields.probe_found_new = args['probe-found-new'] === 'true';
+  }
+  if (args['user-adopted'] !== undefined) {
+    fields.user_adopted = args['user-adopted'] === 'true';
+  }
+  if (!Object.keys(fields).length) {
+    output({ status: 'error', message: 'No fields to annotate. Use --probe-found-new and/or --user-adopted.' });
+    return;
+  }
+  const ok = annotateLastEntry(LOG_FILE, buddySessionId, fields);
+  output({ status: ok ? 'ok' : 'error', session_id: buddySessionId, annotated: fields,
+           message: ok ? 'Annotated last entry' : 'No log entry found for session' });
+}
+
+async function actionMetrics(args) {
+  const stats = getStats(LOG_FILE, args['session-id'] || null);
+  output({ status: 'ok', ...stats });
+}
+
 async function main() {
   const args = parseArgs(process.argv);
 
-  if (!args['project-dir'] && args.action !== 'preflight') {
+  const noProjectDirActions = ['preflight', 'annotate', 'metrics'];
+  if (!args['project-dir'] && !noProjectDirActions.includes(args.action)) {
     output({ status: 'error', message: 'Missing required --project-dir' });
     return;
   }
-
-  if (!args['project-dir'] && args.action === 'preflight') {
+  if (!args['project-dir']) {
     args['project-dir'] = process.cwd();
   }
 
@@ -282,6 +340,12 @@ async function main() {
       break;
     case 'followup':
       await actionFollowup(args);
+      break;
+    case 'annotate':
+      await actionAnnotate(args);
+      break;
+    case 'metrics':
+      await actionMetrics(args);
       break;
     default:
       output({ status: 'error', message: `Unknown action: ${args.action}` });
