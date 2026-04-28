@@ -200,7 +200,7 @@ async function actionProbe(args) {
   }
   const prompt = ev.prompt;
   const evidenceSource = ev.source;
-  const outputFile = `/tmp/buddy-codex-${Date.now()}.txt`;
+  const outputFile = `/tmp/buddy-codex-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`;
 
   // Session policy: isolated (default) | conversation
   // conversation = persist codex_session_id across probes within one buddy session
@@ -355,7 +355,7 @@ async function actionFollowup(args) {
     return;
   }
   const prompt = ev.prompt;
-  const outputFile = `/tmp/buddy-codex-followup-${Date.now()}.txt`;
+  const outputFile = `/tmp/buddy-codex-followup-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`;
   const startTime = Date.now();
   const verificationTaskId = args['verification-task-id'] || newVerificationTaskId();
   appendSessionEvent(buddySessionId, verificationTaskId, 'followup.start', {

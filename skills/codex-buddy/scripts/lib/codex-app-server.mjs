@@ -44,6 +44,13 @@ class JsonRpcClient {
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
     });
+
+    proc.on('error', (e) => {
+      this.closed = true;
+      const err = new Error(`codex app-server spawn error: ${e.message}`);
+      for (const { reject } of this.pending.values()) reject(err);
+      this.pending.clear();
+    });
   }
 
   _handleLine(line) {
@@ -144,7 +151,16 @@ export async function runAppServerTurn({
     turnState.completionReject = reject;
   });
 
+  // Only accept notifications for our thread (defense against multi-thread broker mode).
+  // turnState.threadId is set after thread/start; before that, accept all (single-thread phase).
+  const matchesThread = (params) => {
+    if (!turnState.threadId) return true;
+    const t = params?.threadId || params?.thread_id || params?.thread?.id;
+    return !t || t === turnState.threadId;
+  };
+
   client.onNotification((msg) => {
+    if (!matchesThread(msg.params)) return;
     if (msg.method === 'item/completed') {
       const item = msg.params?.item || msg.params || {};
       turnState.items.push(item);
@@ -154,7 +170,7 @@ export async function runAppServerTurn({
     } else if (msg.method === 'turn/completed') {
       turnState.completed = true;
       turnState.completionResolve();
-    } else if (msg.method === 'turn/failed' || msg.method === 'turn/error') {
+    } else if (msg.method === 'turn/failed' || msg.method === 'turn/error' || msg.method === 'error') {
       turnState.completionReject(new Error(`turn failed: ${JSON.stringify(msg.params)}`));
     }
   });

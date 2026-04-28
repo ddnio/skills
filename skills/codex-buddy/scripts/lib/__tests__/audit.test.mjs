@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { appendLog, getCallCount, getBudgetRemaining, BUDGET_LIMIT } from '../audit.mjs';
+import { appendLog, getCallCount } from '../audit.mjs';
 
 describe('audit', () => {
   let tmpDir;
@@ -42,12 +42,6 @@ describe('audit', () => {
     assert.equal(getCallCount(logFile, 'sess-001'), 2);
   });
 
-  test('getBudgetRemaining returns correct remaining budget', () => {
-    appendLog(logFile, { turn: 1, route: 'codex', conclusion: 'proceed' }, 'sess-001', '/tmp');
-    assert.equal(getBudgetRemaining(logFile, 'sess-001'), BUDGET_LIMIT - 1);
-  });
-
-  test('getBudgetRemaining returns full budget for new session', () => {
-    assert.equal(getBudgetRemaining(logFile, 'new-sess'), BUDGET_LIMIT);
-  });
+  // Budget tracking was removed in commit 4e6b936 (fix(buddy-v3): remove hard budget limit).
+  // Test cases for getBudgetRemaining / BUDGET_LIMIT dropped accordingly.
 });
