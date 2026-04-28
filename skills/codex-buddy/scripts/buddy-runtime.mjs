@@ -189,7 +189,7 @@ async function actionLocal(args) {
 async function actionProbe(args) {
   const startTime = Date.now();
   const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
-  if (!checkCodexAvailable()) {
+  if (process.env.BUDDY_STUB_CODEX !== '1' && !checkCodexAvailable()) {
     output({ status: 'error', rule: 'codex-unavailable', message: 'Codex CLI not found' });
     return;
   }
@@ -384,7 +384,7 @@ async function actionFollowup(args) {
     return;
   }
 
-  if (!checkCodexAvailable()) {
+  if (process.env.BUDDY_STUB_CODEX !== '1' && !checkCodexAvailable()) {
     output({ status: 'error', rule: 'codex-unavailable', message: 'Codex CLI not found' });
     return;
   }

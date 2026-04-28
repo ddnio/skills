@@ -9,13 +9,8 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Read SKILL.md content
 skill_content=$(cat "${PLUGIN_ROOT}/SKILL.md" 2>&1 || echo "Error reading codex-buddy SKILL.md")
 
-# Run preflight check
-preflight_result=""
-if [ -x "$(command -v node)" ]; then
-  preflight_result=$(node "${PLUGIN_ROOT}/scripts/buddy-runtime.mjs" --action preflight 2>/dev/null || echo '{"status":"error","message":"preflight failed"}')
-fi
-
 ## Initialize audit log directory + rotate buddy session id (W1)
+## Order: rotate FIRST so preflight call_count reflects the new sid (Codex review #4).
 ## Read trigger source from stdin; skip rotation on compact to preserve event grouping.
 hook_input=""
 if [ ! -t 0 ]; then
@@ -35,6 +30,12 @@ if [ "$trigger" != "compact" ] && [ -x "$(command -v node)" ]; then
     fs.writeFileSync(process.argv[1] + '/buddy-session.json',
       JSON.stringify({ buddy_session_id: sid, created_at: new Date().toISOString(), trigger: process.argv[2] }));
   " "$BUDDY_HOME_DIR" "$trigger" 2>/dev/null || true
+fi
+
+# Run preflight check (after rotation so call_count is for the new session)
+preflight_result=""
+if [ -x "$(command -v node)" ]; then
+  preflight_result=$(node "${PLUGIN_ROOT}/scripts/buddy-runtime.mjs" --action preflight 2>/dev/null || echo '{"status":"error","message":"preflight failed"}')
 fi
 
 # Escape string for JSON embedding
