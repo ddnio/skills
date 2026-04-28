@@ -325,12 +325,16 @@ async function actionProbe(args) {
               : (parseSessionId(execOutput)
                  || parseSessionIdFromSessions(Math.max(60_000, Date.now() - probeStartTime + 5000))));
     }
-    if (codexSessionId) {
-      saveSession(codexSessionId);
-      if (isConversation) saveConversationSession(buddySessionId, codexSessionId);
-    } else if (ephemeral) {
-      // Clear stale session so follow-up can't accidentally resume an old one
-      saveSession('');
+    // C3 fix: broker thread IDs (thr-N, app-server namespace) must never be
+    // written into the exec-mode session pointer (loadSession / saveSession).
+    // Mixing namespaces causes actionFollowup to `codex exec resume thr-N`.
+    if (!useBroker) {
+      if (codexSessionId) {
+        saveSession(codexSessionId);
+        if (isConversation) saveConversationSession(buddySessionId, codexSessionId);
+      } else if (ephemeral) {
+        saveSession('');
+      }
     }
 
     const codexResult = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';

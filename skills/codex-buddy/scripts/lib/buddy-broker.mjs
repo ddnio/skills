@@ -253,17 +253,15 @@ export async function sendShutdown(paths) {
   } catch {
     // Broker may have closed the connection mid-reply; that's fine.
   }
-  // Wait for files to vanish; if broker is wedged, force-clean.
+  // Wait for files to vanish.
   const deadline = Date.now() + SHUTDOWN_WAIT_MS;
   while (Date.now() < deadline) {
     if (!fs.existsSync(paths.sockPath) && !fs.existsSync(paths.pidPath)) return;
     await sleep(25);
   }
-  // Last resort: SIGTERM any recorded PID.
-  const pid = readPidFile(paths.pidPath);
-  if (isProcessAlive(pid)) {
-    try { process.kill(pid, 'SIGTERM'); } catch {}
-  }
+  // C1 fix: do NOT SIGTERM the recorded PID — OS can reassign PIDs after the
+  // broker exits; killing by stale PID risks killing an unrelated process.
+  // Just unlink the lock files so a future spawnBroker can start fresh.
   cleanupStaleFiles(paths);
 }
 

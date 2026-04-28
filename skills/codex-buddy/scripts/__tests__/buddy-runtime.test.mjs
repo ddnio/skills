@@ -273,6 +273,49 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     }
   });
 
+  test('C3: broker probe must NOT write exec session pointer (saveSession)', () => {
+    const evidence = path.join(os.tmpdir(), `c3-evidence-${Date.now()}.txt`);
+    fs.writeFileSync(evidence, 'task_to_judge: C3 test\nraw_evidence: x\nknown_omissions: none\n');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-c3-'));
+    const stubBin = path.resolve(__dirname, 'fixtures', 'codex-app-server-stub.mjs');
+    fs.chmodSync(stubBin, 0o755);
+    try {
+      spawnSync(
+        'node',
+        [RUNTIME, '--action', 'probe', '--evidence', evidence, '--project-dir', '/tmp',
+         '--session-id', 'c3-test'],
+        {
+          encoding: 'utf8', timeout: 20000,
+          env: {
+            ...process.env,
+            BUDDY_STUB_CODEX: '1',
+            BUDDY_USE_BROKER: '1',
+            BUDDY_BROKER_CODEX_BIN: stubBin,
+            BUDDY_HOME: tmpHome,
+            BUDDY_STUB_REPLY: '{"verdict":"proceed","findings":[],"questions":[]}',
+          },
+        },
+      );
+      // session.json must not contain a broker thread id (thr-N).
+      const sessionFile = path.join(tmpHome, 'session.json');
+      if (fs.existsSync(sessionFile)) {
+        const content = fs.readFileSync(sessionFile, 'utf8');
+        const parsed = JSON.parse(content);
+        assert.ok(
+          !String(parsed.session_id || '').startsWith('thr-'),
+          `session.json must not hold broker thread id; got: ${parsed.session_id}`,
+        );
+      }
+      // broker-thread file SHOULD exist.
+      const threadFiles = fs.readdirSync(tmpHome).filter(f => f.startsWith('broker-thread-'));
+      assert.ok(threadFiles.length >= 1, 'broker-thread persistence file must exist');
+    } finally {
+      try { spawnSync('node', [path.resolve(__dirname, '..', 'buddy-broker-cli.mjs'), 'stop', '--project-dir', '/tmp', '--force'], { encoding: 'utf8', timeout: 5000, env: { ...process.env, BUDDY_HOME: tmpHome } }); } catch {}
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   test('--action log-reply happy path writes reply.<kind> event', () => {
     const sid = `buddy-w2-${Date.now()}`;
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-w2-'));

@@ -199,6 +199,30 @@ describe('buddy-broker — W8 turn/run forwarding', () => {
     }
   });
 
+  test('C2: concurrent turn/run requests are serialized (no interleave)', async () => {
+    const projectRoot = '/tmp/buddy-broker-c2-' + Date.now();
+    fs.mkdirSync(projectRoot, { recursive: true });
+    const paths = getBrokerPaths(TEST_HOME, projectRoot);
+    process.env.BUDDY_STUB_REPLY = 'c2-reply';
+    await spawnBrokerWithStub(projectRoot);
+    try {
+      // Fire 3 concurrent requests; each must complete before the next starts.
+      const results = await Promise.all([
+        sendCommand(paths, { method: 'turn/run', params: { prompt: 'q1' }, timeoutMs: 10000 }),
+        sendCommand(paths, { method: 'turn/run', params: { prompt: 'q2' }, timeoutMs: 10000 }),
+        sendCommand(paths, { method: 'turn/run', params: { prompt: 'q3' }, timeoutMs: 10000 }),
+      ]);
+      // All 3 must succeed (none hangs/errors due to handler race).
+      for (const r of results) {
+        assert.equal(r.result?.finalMessage, 'c2-reply', `expected c2-reply, got: ${JSON.stringify(r)}`);
+      }
+    } finally {
+      delete process.env.BUDDY_STUB_REPLY;
+      delete process.env.BUDDY_BROKER_CODEX_BIN;
+      await sendShutdown(paths);
+    }
+  });
+
   test('status reports codex_ready=true once a turn has run', async () => {
     const projectRoot = '/tmp/buddy-broker-status-' + Date.now();
     fs.mkdirSync(projectRoot, { recursive: true });

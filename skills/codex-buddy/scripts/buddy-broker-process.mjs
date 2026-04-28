@@ -85,22 +85,39 @@ let codexProc = null;
 let codexClient = null;
 let codexInitPromise = null;
 
+// C2 fix: codex app-server handles one turn at a time; concurrent turn/run
+// requests from multiple broker clients must be queued.
+let turnQueue = Promise.resolve();
+
 async function ensureCodexClient() {
   if (codexClient && !codexClient.closed) return codexClient;
   if (codexInitPromise) return codexInitPromise;
   codexInitPromise = (async () => {
     log('spawning codex app-server (lazy first-turn)');
-    codexProc = spawnAppServer(PROJECT_ROOT);
-    const client = new JsonRpcClient(codexProc);
-    codexProc.on('exit', (code) => {
+    const proc = spawnAppServer(PROJECT_ROOT);
+    const client = new JsonRpcClient(proc);
+    // C5 fix: guard exit listener by object identity so a stale proc's exit
+    // doesn't null out a freshly-spawned client.
+    proc.on('exit', (code) => {
+      if (codexProc !== proc) return; // stale — ignore
       log(`codex app-server exited (code=${code})`);
       codexClient = null;
       codexProc = null;
     });
-    await client.request('initialize', {
-      clientInfo: { name: SERVICE_NAME, version: '0.1.0' },
-    });
-    client.notify('initialized', {});
+    try {
+      await client.request('initialize', {
+        clientInfo: { name: SERVICE_NAME, version: '0.1.0' },
+      });
+      client.notify('initialized', {});
+    } catch (err) {
+      // C5 fix: init failed — kill the leaked child and reset globals.
+      log(`codex app-server init failed: ${err.message}`);
+      try { proc.kill('SIGTERM'); } catch {}
+      codexClient = null;
+      codexProc = null;
+      throw err;
+    }
+    codexProc = proc;
     codexClient = client;
     log('codex app-server ready');
     return client;
@@ -118,6 +135,10 @@ async function ensureCodexClient() {
  * final agent message + threadId + first_byte_ms.
  */
 async function runTurn(params) {
+  // C4 fix: measure latency from before ensureCodexClient so the first-ever
+  // broker probe includes the lazy codex app-server spawn cost, keeping
+  // first_byte_ms comparable with exec mode (both count from process-spawn).
+  const startedAt = Date.now();
   const client = await ensureCodexClient();
   const {
     prompt,
@@ -125,7 +146,7 @@ async function runTurn(params) {
     model = null,
     sandbox = 'read-only',
     outputSchema = null,
-    ephemeral = false, // broker mode → persistent thread by default
+    ephemeral = false,
     threadId: existingThreadId = null,
   } = params || {};
   if (!prompt) throw new Error('runTurn: prompt is required');
@@ -138,7 +159,7 @@ async function runTurn(params) {
     completionResolve: null,
     completionReject: null,
     firstByteAt: null,
-    startedAt: Date.now(),
+    startedAt,
   };
   const completionPromise = new Promise((resolve, reject) => {
     turnState.completionResolve = resolve;
@@ -233,13 +254,22 @@ async function handleRequest(req) {
       // Reply, then schedule exit so the client gets the result.
       setImmediate(() => gracefulExit(0));
       return { id, result: { ok: true, shutting_down: true } };
-    case 'turn/run':
+    case 'turn/run': {
+      // C2: enqueue on global serial queue to prevent overlapping turns on
+      // the single codex app-server client.
+      const prevQueue = turnQueue;
+      let done;
+      turnQueue = new Promise((res) => { done = res; });
       try {
+        await prevQueue;
         const result = await runTurn(req.params || {});
         return { id, result };
       } catch (e) {
         return { id, error: { code: -32000, message: e.message } };
+      } finally {
+        done();
       }
+    }
     default:
       return { id, error: { code: -32601, message: `unknown method: ${method}` } };
   }
