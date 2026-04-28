@@ -247,6 +247,7 @@ async function actionProbe(args) {
   try {
     const probeStartTime = startTime;
     let codexSessionId;
+    let firstByteMs = null;
     if (useAppServer) {
       // app-server expects outputSchema as a parsed JSON object, not a file path.
       const outputSchemaObj = schemaFile
@@ -263,7 +264,9 @@ async function actionProbe(args) {
       fs.writeFileSync(outputFile, r.finalMessage || '');
       codexSessionId = r.threadId || null;
     } else {
-      const execOutput = await execCodex(cmdSpec);
+      const execOutput = await execCodex(cmdSpec, {
+        onFirstByte: (ms) => { firstByteMs = ms; },
+      });
       // Resume keeps the same session id; new non-ephemeral probes parse it from output.
       // --output-schema suppresses stdout banner, so fall back to scanning ~/.codex/sessions
       // for the most recent rollout file written since this probe started.
@@ -304,6 +307,7 @@ async function actionProbe(args) {
       parse_mode: parsed.mode,
       verdict: parsed.data?.verdict || null,
       latency_ms: latencyMs,
+      first_byte_ms: firstByteMs,
       followup_recommended: followupRecommended,
       codex_output_file: outputFile,
     }, codexResult);

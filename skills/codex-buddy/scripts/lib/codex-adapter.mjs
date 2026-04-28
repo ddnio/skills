@@ -96,6 +96,8 @@ export function execCodex({ bin, args }, options = {}) {
     let stdout = '';
     let stderr = '';
     let killed = false;
+    const spawnedAt = Date.now();
+    let firstByteAt = null;
 
     const watchdog = setTimeout(() => {
       killed = true;
@@ -103,7 +105,15 @@ export function execCodex({ bin, args }, options = {}) {
       reject(new Error(`codex watchdog timeout after ${watchdogMs / 1000}s`));
     }, watchdogMs);
 
-    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stdout.on('data', (data) => {
+      if (firstByteAt === null) {
+        firstByteAt = Date.now();
+        if (typeof options.onFirstByte === 'function') {
+          try { options.onFirstByte(firstByteAt - spawnedAt); } catch {}
+        }
+      }
+      stdout += data.toString();
+    });
     child.stderr.on('data', (data) => { stderr += data.toString(); });
 
     child.on('close', (code) => {
