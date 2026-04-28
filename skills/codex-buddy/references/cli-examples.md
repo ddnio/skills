@@ -7,24 +7,44 @@
 ## buddy-runtime 调用速查
 
 ```bash
-# Probe 默认 isolated（独立分析）
+# 默认形式：stdin 传 evidence（推荐，无 /tmp 临时文件）
+cat <<'EOF' | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence-stdin --project-dir "$PWD"
+task_to_judge: ...
+[证据] ...
+[omissions] none
+EOF
+
+# 兼容形式：file 传 evidence（仍可用，等价行为）
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
   --evidence /tmp/buddy-evidence.txt --project-dir "$PWD"
 
 # Probe 多轮共享上下文（同一 verification task 内连续追问）
-# 第一次 probe 写入 codex_session_id；后续相同命令自动 resume
-node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
-  --evidence /tmp/buddy-evidence-step2.txt --project-dir "$PWD" \
-  --session-policy conversation
+echo "$EVIDENCE" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence-stdin --project-dir "$PWD" --session-policy conversation
 
 # Follow-up（独立动作，与 conversation 互补）
-node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action followup \
-  --evidence /tmp/buddy-evidence-followup.txt --project-dir "$PWD"
+echo "$EVIDENCE" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action followup \
+  --evidence-stdin --project-dir "$PWD"
 
 # Annotate（每次 probe 综合后必须）
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action annotate \
-  --probe-found-new true --user-adopted true
+  --probe-found-new true --user-adopted true \
+  --verification-task-id <task-id-from-probe-output>
+
+# Synthesis 也写入会话日志（可选）
+echo "$SYNTHESIS_TEXT" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" \
+  --action log-synthesis --content-stdin --verification-task-id <task-id>
+
+# Replay 一次 buddy 会话的事件流
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action replay --session-id buddy-xxxxxx
 ```
+
+**会话事件日志：** runtime 自动把每次交互写入 `~/.buddy/sessions/<buddy-session-id>.jsonl`：
+- `probe.start` / `probe.codex_output` / `probe.synthesis` / `annotate` / `*.error`
+- 每行含 `payload`（默认 redacted）+ `payload_sha256` + `payload_bytes` + `redaction_policy`
+- 大于 256KiB 的 payload 转 `payload_ref`（外部文件，路径 `~/.buddy/sessions/<sid>.payloads/`）
+- `BUDDY_AUDIT_RAW=1` 跳过 redaction（仅本地调试用）
 
 **Session Policy 选择：**
 - `isolated`（默认）— 每次 probe 独立，无上下文，不被前次结论污染

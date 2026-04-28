@@ -58,6 +58,10 @@ Gate 触发后：先 **local evidence**（grep/test/lint）→ 不够再 **Codex
 通过 `<SKILL_DIR>/scripts/buddy-runtime.mjs` 调度（base directory 见 skill 加载行）。
 完整 CLI 见 [`references/cli-examples.md`](./references/cli-examples.md)。
 
+**默认证据传递：stdin**（不再写 `/tmp` 临时文件）：
+`echo "$evidence" | node ".../buddy-runtime.mjs" --action probe --evidence-stdin --project-dir "$PWD"`
+也支持 `--evidence <file>` 兼容形式。runtime 自动把每次交互写入 `~/.buddy/sessions/<sid>.jsonl`（事件流：probe.start / codex_output / annotate / synthesis；payload 默认 redacted，sha256+bytes 可校验；`BUDDY_AUDIT_RAW=1` 写 raw）。
+
 **Session Policy（probe）：** 默认 `isolated`（独立分析，无上下文共享）。同一 verification task 内连续多次需要追问 → `--session-policy conversation`（自动 resume，省启动）。conversation 必须显式 opt-in，避免污染独立分析。
 
 probe 同决策最多 2 次（probe + follow-up）。耗时 30-80s，**必须 `run_in_background`**。

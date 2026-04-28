@@ -31,6 +31,7 @@ import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
 import { appendLog, getCallCount, annotateLastEntry } from './lib/audit.mjs';
 import { getStats } from './lib/metrics.mjs';
+import { appendSessionEvent, readSessionEvents, newVerificationTaskId } from './lib/session-log.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -93,6 +94,37 @@ function parseArgs(argv) {
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
+}
+
+function readAllStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => { data += chunk; });
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', reject);
+  });
+}
+
+/**
+ * Read evidence from --evidence (file path or "-" for stdin) or --evidence-stdin.
+ * Returns { ok, prompt, source, error }.
+ */
+async function loadEvidence(args) {
+  const useStdin = args['evidence-stdin'] === 'true' || args.evidence === '-';
+  if (useStdin) {
+    if (process.stdin.isTTY) {
+      return { ok: false, error: 'evidence-stdin requested but stdin is a TTY (no piped input)' };
+    }
+    const prompt = await readAllStdin();
+    if (!prompt.length) return { ok: false, error: 'stdin produced empty evidence' };
+    return { ok: true, prompt, source: 'stdin' };
+  }
+  const file = args.evidence;
+  if (!file || !fs.existsSync(file)) {
+    return { ok: false, error: `Evidence not found: ${file || '<missing>'}. Pass --evidence <file> or --evidence-stdin.` };
+  }
+  return { ok: true, prompt: fs.readFileSync(file, 'utf8'), source: file };
 }
 
 async function actionPreflight(_args) {
@@ -159,13 +191,13 @@ async function actionProbe(args) {
     return;
   }
 
-  const evidenceFile = args.evidence;
-  if (!evidenceFile || !fs.existsSync(evidenceFile)) {
-    output({ status: 'error', message: `Evidence file not found: ${evidenceFile}` });
+  const ev = await loadEvidence(args);
+  if (!ev.ok) {
+    output({ status: 'error', message: ev.error });
     return;
   }
-
-  const prompt = fs.readFileSync(evidenceFile, 'utf8');
+  const prompt = ev.prompt;
+  const evidenceSource = ev.source;
   const outputFile = `/tmp/buddy-codex-${Date.now()}.txt`;
 
   // Session policy: isolated (default) | conversation
@@ -173,6 +205,16 @@ async function actionProbe(args) {
   const sessionPolicy = args['session-policy'] === 'conversation' ? 'conversation' : 'isolated';
   const isConversation = sessionPolicy === 'conversation';
   const resumedSessionId = isConversation ? loadConversationSession(buddySessionId) : null;
+
+  const verificationTaskId = args['verification-task-id'] || newVerificationTaskId();
+  appendSessionEvent(buddySessionId, verificationTaskId, 'probe.start', {
+    evidence_source: evidenceSource,
+    project_dir: args['project-dir'],
+    session_policy: sessionPolicy,
+    resumed: !!resumedSessionId,
+    rule: args.rule || 'vlevel:V2',
+    level: args.level || 'V2',
+  }, prompt);
 
   // ephemeral defaults: isolated → true; conversation → false (need persistent session)
   // Legacy --ephemeral false still honored for backward compat in isolated mode.
@@ -225,6 +267,16 @@ async function actionProbe(args) {
     const latencyMs = Date.now() - startTime;
     appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'probe' });
 
+    appendSessionEvent(buddySessionId, verificationTaskId, 'probe.codex_output', {
+      codex_session_id: codexSessionId,
+      ephemeral,
+      parse_mode: parsed.mode,
+      verdict: parsed.data?.verdict || null,
+      latency_ms: latencyMs,
+      followup_recommended: followupRecommended,
+      codex_output_file: outputFile,
+    }, codexResult);
+
     output({
       status: 'verified',
       rule: envelope.rule,
@@ -234,6 +286,7 @@ async function actionProbe(args) {
       conclusion: envelope.conclusion,
       unverified: envelope.unverified,
       session_id: buddySessionId,
+      verification_task_id: verificationTaskId,
       codex_session_id: codexSessionId,
       ephemeral,
       session_policy: sessionPolicy,
@@ -245,7 +298,11 @@ async function actionProbe(args) {
       structured: parsed.data,
     });
   } catch (e) {
-    output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile });
+    appendSessionEvent(buddySessionId, verificationTaskId, 'probe.error', {
+      message: e.message.split('\n')[0],
+      codex_output_file: outputFile,
+    });
+    output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile, verification_task_id: verificationTaskId });
   }
 }
 
@@ -264,15 +321,19 @@ async function actionFollowup(args) {
     return;
   }
 
-  const evidenceFile = args.evidence;
-  if (!evidenceFile || !fs.existsSync(evidenceFile)) {
-    output({ status: 'error', message: `Evidence file not found: ${evidenceFile}` });
+  const ev = await loadEvidence(args);
+  if (!ev.ok) {
+    output({ status: 'error', message: ev.error });
     return;
   }
-
-  const prompt = fs.readFileSync(evidenceFile, 'utf8');
+  const prompt = ev.prompt;
   const outputFile = `/tmp/buddy-codex-followup-${Date.now()}.txt`;
   const startTime = Date.now();
+  const verificationTaskId = args['verification-task-id'] || newVerificationTaskId();
+  appendSessionEvent(buddySessionId, verificationTaskId, 'followup.start', {
+    evidence_source: ev.source,
+    codex_session_id: codexSessionId,
+  }, prompt);
 
   const cmdSpec = buildResumeArgs({
     sessionId: codexSessionId,
@@ -297,6 +358,12 @@ async function actionFollowup(args) {
     const latencyMs = Date.now() - startTime;
     appendLog(LOG_FILE, envelope, buddySessionId, args['project-dir'], latencyMs, { action: 'followup' });
 
+    appendSessionEvent(buddySessionId, verificationTaskId, 'followup.codex_output', {
+      codex_session_id: codexSessionId,
+      latency_ms: latencyMs,
+      codex_output_file: outputFile,
+    }, codexResult);
+
     output({
       status: 'verified',
       rule: envelope.rule,
@@ -306,11 +373,16 @@ async function actionFollowup(args) {
       conclusion: envelope.conclusion,
       unverified: envelope.unverified,
       session_id: buddySessionId,
+      verification_task_id: verificationTaskId,
       codex_session_id: codexSessionId,
       call_count: getCallCount(LOG_FILE, buddySessionId),
     });
   } catch (e) {
-    output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile });
+    appendSessionEvent(buddySessionId, verificationTaskId, 'followup.error', {
+      message: e.message.split('\n')[0],
+      codex_output_file: outputFile,
+    });
+    output({ status: 'error', message: e.message.split('\n')[0], codex_output_file: outputFile, verification_task_id: verificationTaskId });
   }
 }
 
@@ -330,8 +402,44 @@ async function actionAnnotate(args) {
     return;
   }
   const ok = annotateLastEntry(LOG_FILE, buddySessionId, fields);
+  if (ok) {
+    appendSessionEvent(buddySessionId, args['verification-task-id'] || 'unknown', 'annotate', fields);
+  }
   output({ status: ok ? 'ok' : 'error', session_id: buddySessionId, annotated: fields,
            message: ok ? 'Annotated last entry' : 'No log entry found for session' });
+}
+
+// Allow Claude to log synthesis (or any post-hoc note) into the buddy session log.
+// Reads content from --content <file>, --content - (stdin), or --content-stdin.
+async function actionLogSynthesis(args) {
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const verificationTaskId = args['verification-task-id'] || 'unknown';
+  let content = '';
+  if (args['content-stdin'] === 'true' || args.content === '-') {
+    content = await readAllStdin();
+  } else if (args.content && fs.existsSync(args.content)) {
+    content = fs.readFileSync(args.content, 'utf8');
+  } else if (typeof args.content === 'string' && args.content !== 'true') {
+    content = args.content;
+  }
+  if (!content.length) {
+    output({ status: 'error', message: 'Empty synthesis content. Pass --content <file|->,  --content-stdin, or inline string.' });
+    return;
+  }
+  appendSessionEvent(buddySessionId, verificationTaskId, 'probe.synthesis', {
+    note: args.note || null,
+  }, content);
+  output({ status: 'ok', session_id: buddySessionId, verification_task_id: verificationTaskId, message: 'Synthesis logged' });
+}
+
+async function actionReplay(args) {
+  const buddySessionId = args['session-id'] || loadBuddySession();
+  if (!buddySessionId) {
+    output({ status: 'error', message: 'No buddy session ID. Pass --session-id <id>.' });
+    return;
+  }
+  const events = readSessionEvents(buddySessionId);
+  output({ status: 'ok', session_id: buddySessionId, events_count: events.length, events });
 }
 
 async function actionMetrics(args) {
@@ -342,7 +450,7 @@ async function actionMetrics(args) {
 async function main() {
   const args = parseArgs(process.argv);
 
-  const noProjectDirActions = ['preflight', 'annotate', 'metrics'];
+  const noProjectDirActions = ['preflight', 'annotate', 'metrics', 'log-synthesis', 'replay'];
   if (!args['project-dir'] && !noProjectDirActions.includes(args.action)) {
     output({ status: 'error', message: 'Missing required --project-dir' });
     return;
@@ -369,6 +477,12 @@ async function main() {
       break;
     case 'metrics':
       await actionMetrics(args);
+      break;
+    case 'log-synthesis':
+      await actionLogSynthesis(args);
+      break;
+    case 'replay':
+      await actionReplay(args);
       break;
     default:
       output({ status: 'error', message: `Unknown action: ${args.action}` });

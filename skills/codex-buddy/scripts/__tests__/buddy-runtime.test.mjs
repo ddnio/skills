@@ -85,6 +85,99 @@ describe('buddy-runtime CLI', () => {
   });
 });
 
+describe('redact + session-log', () => {
+  test('redact() masks common secrets', async () => {
+    const { redact } = await import('../lib/redact.mjs');
+    const r = redact('api_key=sk-abcdefghijklmnopqrstuvwx token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa12345678 password="hunter2hunter2"');
+    assert.match(r, /\[REDACTED:secret\]/);
+    assert.doesNotMatch(r, /sk-abcdefghij/);
+    assert.doesNotMatch(r, /hunter2hunter2/);
+  });
+
+  test('redact() preserves non-secret text', async () => {
+    const { redact } = await import('../lib/redact.mjs');
+    assert.equal(redact('plain text without secrets'), 'plain text without secrets');
+  });
+
+  test('appendSessionEvent writes JSONL with redacted payload + sha256', async () => {
+    const { appendSessionEvent, readSessionEvents } = await import('../lib/session-log.mjs');
+    const sid = `buddy-test-${Date.now()}`;
+    const taskId = 'vtask-test-1';
+    appendSessionEvent(sid, taskId, 'probe.start', { rule: 'test' }, 'token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa12345678 hello');
+    const events = readSessionEvents(sid);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'probe.start');
+    assert.equal(events[0].verification_task_id, taskId);
+    assert.match(events[0].payload, /\[REDACTED/);
+    assert.equal(events[0].payload_bytes > 0, true);
+    assert.match(events[0].payload_sha256, /^[0-9a-f]{64}$/);
+    assert.equal(events[0].redaction_policy, '1');
+    fs.rmSync(`${process.env.HOME}/.buddy/sessions/${sid}.jsonl`, { force: true });
+  });
+
+  test('appendSessionEvent appends multiple events', async () => {
+    const { appendSessionEvent, readSessionEvents } = await import('../lib/session-log.mjs');
+    const sid = `buddy-test-multi-${Date.now()}`;
+    appendSessionEvent(sid, 'v1', 'probe.start', {}, 'first');
+    appendSessionEvent(sid, 'v1', 'probe.codex_output', { latency_ms: 100 }, 'second');
+    const events = readSessionEvents(sid);
+    assert.equal(events.length, 2);
+    assert.equal(events[1].latency_ms, 100);
+    fs.rmSync(`${process.env.HOME}/.buddy/sessions/${sid}.jsonl`, { force: true });
+  });
+});
+
+describe('CLI: stdin evidence + replay + log-synthesis', () => {
+  test('--action log-synthesis with --content-stdin writes synthesis event', () => {
+    const sid = `buddy-cli-test-${Date.now()}`;
+    const taskId = 'vtask-cli-1';
+    const result = execSync(
+      `echo "synthesis content" | node "${RUNTIME}" --action log-synthesis --content-stdin --session-id ${sid} --verification-task-id ${taskId}`,
+      { encoding: 'utf8', timeout: 10000, shell: '/bin/bash' }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'ok');
+    assert.equal(json.verification_task_id, taskId);
+    fs.rmSync(`${process.env.HOME}/.buddy/sessions/${sid}.jsonl`, { force: true });
+  });
+
+  test('--action log-synthesis without content returns error', () => {
+    const result = execSync(
+      `node "${RUNTIME}" --action log-synthesis --session-id buddy-empty-test`,
+      { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'], input: '' }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'error');
+  });
+
+  test('--action replay returns events for a session', () => {
+    const sid = `buddy-replay-${Date.now()}`;
+    execSync(
+      `echo "first synth" | node "${RUNTIME}" --action log-synthesis --content-stdin --session-id ${sid} --verification-task-id vtask-1`,
+      { encoding: 'utf8', timeout: 10000, shell: '/bin/bash' }
+    );
+    const result = execSync(
+      `node "${RUNTIME}" --action replay --session-id ${sid}`,
+      { encoding: 'utf8', timeout: 10000 }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'ok');
+    assert.equal(json.events_count, 1);
+    assert.equal(json.events[0].event, 'probe.synthesis');
+    fs.rmSync(`${process.env.HOME}/.buddy/sessions/${sid}.jsonl`, { force: true });
+  });
+
+  test('--action probe with neither --evidence nor --evidence-stdin returns error', () => {
+    const result = execSync(
+      `node "${RUNTIME}" --action probe --project-dir /tmp`,
+      { encoding: 'utf8', timeout: 10000, input: '' }
+    );
+    const json = JSON.parse(result);
+    assert.equal(json.status, 'error');
+    assert.match(json.message, /Evidence not found/);
+  });
+});
+
 describe('session policy helpers', () => {
   test('saveConversationSession + loadConversationSession round-trip', async () => {
     const { saveConversationSession, loadConversationSession } = await import(
