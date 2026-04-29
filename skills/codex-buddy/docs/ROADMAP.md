@@ -38,11 +38,43 @@
 
 ---
 
+### Stage 5 — Broker（feat/ux-stage1 worktree）✅ 未合 main
+
+W10: cleanup/gitignore/stub-bypass/hook-timing
+W7: broker lifecycle（Unix socket, PID, stale-lock, broker-cli, session-end hook）
+W8: turn/run forwarding + thread persistence + actionProbe wiring + BUDDY_USE_LEGACY_EXEC fallback
+W9 #1-2: execCodex stderr first_byte fix + broker turn first_byte
+W6.5: topic-drift Jaccard tripwire（soft warning on cross-topic reuse）
+W11: broker 改为默认 runtime（BUDDY_USE_LEGACY_EXEC=1 / BUDDY_USE_BROKER=0 回退）
+C1-C5: Codex 审计 5 个 correctness bug 全修
+
+**78/78 tests, verify-repo PASSED, synced 到 ~/.claude/skills/codex-buddy/**
+**累积 9 commits（ce0c037 → bcc4a1e），未合 main**
+**红线：未完成 L3 行为验证 + L5 evals 且未得用户点头，不合 main**
+
+---
+
 ## 待合 main（user 决定时机）
 
-当前 worktree feat/ux-stage1 累积 11 个 commits，等用户重启 session 跑 L3 行为验证 + L5 evals → 用户点头后才能合 main。
+Stage 5 所有代码层工作已完成。合 main 前需：
+1. 跑若干次真实 broker probe（自然积累）
+2. 运行 `node scripts/buddy-bench.mjs --mode broker-startup-delta`（需有 broker session 数据）
+3. 用户点头
 
-预先存在的 verify-repo FAILED（CHANGELOG 引用 `discussions/2026-03-31-v3-direction-brainstorm.md` 不存在）非本次引入，独立 cleanup。
+## 下一 session 起点（2026-04-29）
+
+**Plan 文件：** `docs/codex-buddy-stage5-broker.md`（已 commit 到 tracked 位置）
+
+**优先级 P0 — telemetry fix（~30min）：**
+- 修 `audit.mjs:appendLog` 写入 `ts` + `buddy_session_id`（两个字段当前全为空）
+- 影响：logs.jsonl 所有历史数据无法按 session 归因，bench 无法时序分析
+- 加一条 test（audit.test.mjs 验证这两个字段存在且非空）
+
+**优先级 P1 — SKILL.md Session Policy 澄清（~15min）：**
+- Session Policy（`--session-policy isolated|conversation`）是 codex exec 的 session resume 策略
+- Broker thread（`--fresh-thread`）是 codex app-server 的 thread 复用策略
+- 两者是独立的两层，当前 SKILL.md 把 "isolated 默认" 说法用于描述 broker 场景，会造成误解
+- 更新 SKILL.md 中 "Session Policy" 段，区分两层概念
 
 ---
 
