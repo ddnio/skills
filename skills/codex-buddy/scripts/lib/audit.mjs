@@ -101,7 +101,7 @@ export function getCallCount(logFile, buddySessionId) {
   return lines.reduce((count, line) => {
     let entry;
     try { entry = JSON.parse(line); } catch { return count; }
-    if (entrySessionId(entry) === buddySessionId && (entry.route === 'codex' || entry.route === 'both')) {
+    if (entrySessionId(entry) === buddySessionId && (entry.route === 'codex' || entry.route === 'both' || entry.route === 'kimi')) {
       return count + 1;
     }
     return count;

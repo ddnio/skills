@@ -56,6 +56,14 @@ export function execKimi(prompt, opts = {}) {
              parseStatus: 'failed', parserVersion, model: MODEL };
   }
 
+  // Handle system-level spawn errors (e.g. ENOENT — kimi not installed)
+  if (result.error) {
+    return { exitCode: -1, raw: result.error.message,
+             parsed: { think: [], text: [], sessionId: null },
+             parseStatus: 'failed', parserVersion, model: MODEL,
+             spawnError: result.error.message };
+  }
+
   const stdout = result.stdout || '';
   const parsed = parse(stdout);
 

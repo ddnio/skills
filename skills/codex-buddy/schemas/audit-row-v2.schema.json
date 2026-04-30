@@ -32,11 +32,14 @@
     "level":                { "type": "string", "enum": ["V0", "V1", "V2", "V3"] },
     "rule":                 { "type": "string", "minLength": 1 },
     "triggered":            { "type": "boolean" },
-    "route":                { "type": "string", "enum": ["local", "codex", "both", "none"] },
+    "route":                { "type": "string", "enum": ["local", "codex", "both", "none", "kimi"] },
     "evidence":             { "type": "array", "items": { "type": "string" } },
     "conclusion":           { "type": "string", "enum": ["proceed", "stop", "needs-evidence", "needs-review", "skipped"] },
     "confidence":           { "type": "string", "enum": ["high", "medium", "low"] },
-    "unverified":           { "type": "array", "items": { "type": "string" } }
+    "unverified":           { "type": "array", "items": { "type": "string" } },
+    "model":                { "type": "string", "enum": ["codex", "kimi"] },
+    "parse_status":         { "type": "string", "enum": ["ok", "partial", "failed"] },
+    "fallback":             { "type": "string", "enum": ["none", "raw"] }
   },
   "additionalProperties": false,
   "$comment": "verification_task_id is required (string, not nullable) in v2. Legacy logs.jsonl entries written before stage5b are NOT v2 audit rows and are not validated by this schema."

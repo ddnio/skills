@@ -245,11 +245,26 @@ async function actionProbe(args) {
       level: args.level || 'V2',
     }, ev.prompt);
 
+    // Preflight: fail fast if kimi is not installed (avoids silent verified-on-failure)
+    const kimiCheck = kimiPreflight();
+    if (!kimiCheck.ok) {
+      output({ status: 'error', rule: 'kimi-unavailable',
+               message: `Kimi CLI not available: ${kimiCheck.error}` });
+      return;
+    }
+
     process.stderr.write(`[buddy] kimi probe started, sid=${buddySessionId}, ETA 30-80s\n`);
     const kimiResult = execKimi(ev.prompt, {
       projectDir: args['project-dir'],
       model: args.model || undefined,
     });
+
+    // Fail if kimi failed to spawn (system error, e.g. ENOENT)
+    if (kimiResult.spawnError) {
+      output({ status: 'error', rule: 'kimi-spawn-failed',
+               message: `Kimi spawn error: ${kimiResult.spawnError}` });
+      return;
+    }
     const latencyMs = Date.now() - startTime;
 
     // ThinkPart → session log (audit only, not in synthesis)
