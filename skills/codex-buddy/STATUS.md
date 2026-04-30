@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.1.0
+v3.2.0
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -62,6 +62,19 @@ NONE
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
 NONE
+
+## 架构边界
+
+本方案当前支持 **2 个 buddy model**：`codex`（默认）、`kimi`（`--buddy-model kimi`）。
+- Kimi 解析（`parsers/kimi-repr-v1.mjs`）为 best-effort；`partial`/`failed` 不阻断主流程，fallback 到 raw stdout
+- 引入第三个模型时**必须重构为 registry 模式**（`scripts/lib/model-registry.mjs`），禁止再加 if 分支
+- Kimi session resume 未实现（session ID 已记录在 audit log，可手动 `kimi -r <id>`）
+
+## external_docs
+
+- Kimi CLI: https://moonshotai.github.io/kimi-cli/
+- Kimi GitHub: https://github.com/MoonshotAI/kimi-cli
+- Agent Skills spec: https://agentskills.io/home
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->

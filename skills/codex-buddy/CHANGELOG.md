@@ -4,6 +4,32 @@
 
 ---
 
+## v3.2.0 — 2026-04-30 Kimi CLI 接入（按需路由）
+
+### Content
+- **新增 `scripts/lib/kimi-adapter.mjs`**：Kimi CLI exec 调用（`kimi --print --afk -p`）+ preflight 检测
+- **新增 `scripts/lib/parsers/kimi-repr-v1.mjs`**：Kimi `--print` 输出事件流解析器（ThinkPart/TextPart/SessionId）；全程不抛异常；parseStatus ok/partial/failed 三态
+- **`scripts/buddy-runtime.mjs`**：`--buddy-model kimi` 顶层路由分叉；Codex 三条路径零改动；三处现有 appendLog 调用补 `model:'codex'`
+- **`scripts/lib/audit.mjs`**：appendLog 新增可选字段 `model` / `parse_status` / `fallback`
+- **新增 `scripts/lib/__tests__/kimi-repr-v1.test.mjs`**：14 个 parser 单测（含 partial/failed 用例，全部不抛）
+- **新增 `references/kimi-cli.md`**：Kimi CLI 运行时参考 + 文档链接
+- **新增 `docs/kimi-reference.md`**：架构决策说明 + 已知限制 + 文档链接
+- **`SKILL.md`**：注意事项第 9 条（Kimi 路由说明）
+- **`STATUS.md`**：架构边界声明（2 个 buddy model 边界，第三个需重构为 registry）
+
+### 架构决策
+- Option A（顶层路由分叉）：Codex 路径零改动，Kimi 走独立分支
+- 解析双层：adapter（执行）+ parser（解析），解析器可独立替换
+- ThinkPart → 审计日志，TextPart → 综合输出；parseStatus 失败时 fallback 到 raw stdout
+- 已知技术债：2 模型硬编码，第三模型需 registry 重构
+
+### 文档引用
+- Kimi CLI: https://moonshotai.github.io/kimi-cli/
+- GitHub: https://github.com/MoonshotAI/kimi-cli
+- Agent Skills: https://agentskills.io/home
+
+---
+
 ## Stage 6c — 2026-04-30 broker 健壮性 + W-015 + SESSION_HANDOFF 迁移
 
 ### Content
