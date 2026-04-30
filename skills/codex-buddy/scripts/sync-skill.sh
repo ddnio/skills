@@ -40,6 +40,8 @@ if command -v rsync &>/dev/null; then
   rsync -a --delete "$SKILL_DIR/schemas/" "$SKILL_DST/schemas/"
   rsync -a --delete "$SKILL_DIR/hooks/" "$SKILL_DST/hooks/"
   cp "$SKILL_DIR/SKILL.md" "$SKILL_DST/"
+  cp "$SKILL_DIR/STATUS.md" "$SKILL_DST/"
+  cp "$SKILL_DIR/CHANGELOG.md" "$SKILL_DST/"
 else
   # fallback: 先清空再复制
   rm -rf "$SKILL_DST/references" "$SKILL_DST/scripts" "$SKILL_DST/schemas" "$SKILL_DST/hooks"
@@ -48,6 +50,8 @@ else
   cp -R "$SKILL_DIR/schemas" "$SKILL_DST/"
   cp -R "$SKILL_DIR/hooks" "$SKILL_DST/"
   cp "$SKILL_DIR/SKILL.md" "$SKILL_DST/"
+  cp "$SKILL_DIR/STATUS.md" "$SKILL_DST/"
+  cp "$SKILL_DIR/CHANGELOG.md" "$SKILL_DST/"
 fi
 
 # hooks 同步到 plugin cache（hooks 由插件系统加载，不在 skills 目录）
@@ -62,4 +66,4 @@ if [ "$HOST" = "claude" ]; then
 fi
 
 echo "[sync-skill] Synced: $SKILL_DIR -> $SKILL_DST (host: $HOST)"
-echo "  SKILL.md + references/ + scripts/ + schemas/ + hooks/"
+echo "  SKILL.md + STATUS.md + CHANGELOG.md + references/ + scripts/ + schemas/ + hooks/"

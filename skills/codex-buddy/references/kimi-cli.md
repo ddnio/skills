@@ -19,6 +19,27 @@ node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action preflight --buddy-model ki
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action preflight
 ```
 
+### 多行证据传递（heredoc 注意事项）
+
+当证据包含多行内容或需要 shell 变量展开时，使用**不加引号**的 heredoc 分隔符：
+
+```bash
+# ✅ 正确：不加引号的 EOF，$() 和变量会展开
+EVIDENCE_FILE=$(mktemp)
+cat > "$EVIDENCE_FILE" << EOF
+task_to_judge: $(your_task_description)
+$(cat /path/to/diff.txt)
+known_omissions: none
+EOF
+cat "$EVIDENCE_FILE" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" \
+  --action probe --buddy-model kimi --evidence-stdin --project-dir "$PWD"
+
+# ❌ 错误：加引号的 'EOF'，$() 不展开，Kimi 收到字面量路径然后试图执行 shell 命令
+cat > "$EVIDENCE_FILE" << 'EOF'
+$(cat /path/to/diff.txt)   # ← Kimi 看到的是这个字面量，不是内容
+EOF
+```
+
 ---
 
 ## How Kimi Is Invoked
