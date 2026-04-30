@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import {
   getWorktreeHash,
   getBrokerPaths,
@@ -22,12 +23,14 @@ import {
 const FIXTURE_PROJECT = '/tmp/buddy-broker-test-project';
 let TEST_HOME;
 let prevBuddyHome;
+let CAN_USE_UNIX_SOCKETS = false;
 
-before(() => {
+before(async () => {
   prevBuddyHome = process.env.BUDDY_HOME;
   TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-broker-test-'));
   process.env.BUDDY_HOME = TEST_HOME;
   fs.mkdirSync(FIXTURE_PROJECT, { recursive: true });
+  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport();
 });
 
 after(() => {
@@ -61,7 +64,8 @@ describe('buddy-broker — pure helpers', () => {
 });
 
 describe('buddy-broker — lifecycle round-trip', () => {
-  test('spawn → initialize → shutdown', async () => {
+  test('spawn → initialize → shutdown', async (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const paths = getBrokerPaths(TEST_HOME, FIXTURE_PROJECT);
     const { pid } = await spawnBroker({ projectRoot: FIXTURE_PROJECT, home: TEST_HOME });
     try {
@@ -94,7 +98,8 @@ describe('buddy-broker — lifecycle round-trip', () => {
     assert.equal(await isBrokerAlive(paths), false);
   });
 
-  test('spawn cleans up stale lock from a dead prior run', async () => {
+  test('spawn cleans up stale lock from a dead prior run', async (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const projectRoot = '/tmp/buddy-broker-stale2-' + Date.now();
     fs.mkdirSync(projectRoot, { recursive: true });
     const paths = getBrokerPaths(TEST_HOME, projectRoot);
@@ -148,7 +153,8 @@ async function spawnBrokerWithStub(projectRoot) {
 }
 
 describe('buddy-broker — W8 turn/start streaming forwarding', () => {
-  test('turn/start with no threadId → thread/start + streaming → finalMessage + threadId', async () => {
+  test('turn/start with no threadId → thread/start + streaming → finalMessage + threadId', async (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const projectRoot = '/tmp/buddy-broker-turn-' + Date.now();
     fs.mkdirSync(projectRoot, { recursive: true });
     const paths = getBrokerPaths(TEST_HOME, projectRoot);
@@ -165,7 +171,8 @@ describe('buddy-broker — W8 turn/start streaming forwarding', () => {
     }
   });
 
-  test('turn/start with existing threadId reuses it (no thread/start)', async () => {
+  test('turn/start with existing threadId reuses it (no thread/start)', async (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const projectRoot = '/tmp/buddy-broker-thread-reuse-' + Date.now();
     fs.mkdirSync(projectRoot, { recursive: true });
     const paths = getBrokerPaths(TEST_HOME, projectRoot);
@@ -187,7 +194,8 @@ describe('buddy-broker — W8 turn/start streaming forwarding', () => {
     }
   });
 
-  test('C2: concurrent turn/start requests are serialized (broker busy response)', async () => {
+  test('C2: concurrent turn/start requests are serialized (broker busy response)', async (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const projectRoot = '/tmp/buddy-broker-c2-' + Date.now();
     fs.mkdirSync(projectRoot, { recursive: true });
     const paths = getBrokerPaths(TEST_HOME, projectRoot);
@@ -219,3 +227,21 @@ describe('buddy-broker — W8 turn/start streaming forwarding', () => {
     }
   });
 });
+
+function checkUnixSocketSupport() {
+  const sockPath = path.join(os.tmpdir(), `buddy-socket-check-${process.pid}-${Date.now()}.sock`);
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try { server.close(); } catch {}
+      try { fs.unlinkSync(sockPath); } catch {}
+      resolve(ok);
+    };
+    server.once('listening', () => finish(true));
+    server.once('error', () => finish(false));
+    server.listen(sockPath);
+  });
+}

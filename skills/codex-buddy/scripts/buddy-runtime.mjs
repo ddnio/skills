@@ -28,13 +28,14 @@ import {
   saveConversationSession, loadConversationSession,
   trimPrompt,
 } from './lib/codex-adapter.mjs';
-import { execKimi, preflight as kimiPreflight } from './lib/kimi-adapter.mjs';
+import { execKimi } from './lib/kimi-adapter.mjs';
 import { runAppServerTurn } from './lib/codex-app-server.mjs';
 import {
   spawnBroker, runBrokerTurn,
   loadBrokerThread, saveBrokerThread, clearBrokerThread,
   loadBrokerLastTask,
 } from './lib/buddy-broker.mjs';
+import { getProvider, shouldFallbackFromBrokerError } from './lib/providers.mjs';
 import { checkTopicDrift } from './lib/topic-drift.mjs';
 import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
@@ -144,29 +145,19 @@ async function actionPreflight(args) {
   const buddyModel = args['buddy-model'] || 'codex';
   const lookup = args['project-dir'] ? { cwd: args['project-dir'] } : {};
   const buddySessionId = loadBuddySession(lookup);
-
-  if (buddyModel === 'kimi') {
-    const kimi = kimiPreflight();
-    output({
-      status: kimi.ok ? 'ok' : 'error',
-      kimi_available: kimi.ok,
-      kimi_version: kimi.version,
-      model: 'kimi',
-      call_count: buddySessionId ? getCallCount(logFilePath(), buddySessionId) : 0,
-      message: kimi.ok
-        ? `Kimi CLI ready (${kimi.version})`
-        : `Kimi CLI not found or failed: ${kimi.error}. Install: https://moonshotai.github.io/kimi-cli/`,
-    });
+  let provider;
+  try {
+    provider = getProvider(buddyModel);
+  } catch (e) {
+    output({ status: 'error', model: buddyModel, message: e.message });
     return;
   }
 
-  const codexAvailable = checkCodexAvailable();
   output({
-    status: codexAvailable ? 'ok' : 'error',
-    codex_available: codexAvailable,
-    model: 'codex',
+    ...provider.preflight(),
+    transports: provider.transports,
+    supports_fresh_thread: provider.supportsFreshThread,
     call_count: buddySessionId ? getCallCount(logFilePath(), buddySessionId) : 0,
-    message: codexAvailable ? 'Codex CLI ready' : 'Codex CLI not found. Install: npm i -g @openai/codex',
   });
 }
 
@@ -226,8 +217,23 @@ async function actionLocal(args) {
 
 async function actionProbe(args) {
   const startTime = Date.now();
-  const buddyModel = args['buddy-model'] || 'codex';
+  let provider;
+  try {
+    provider = getProvider(args['buddy-model'] || 'codex');
+  } catch (e) {
+    output({ status: 'error', message: e.message });
+    return;
+  }
+  const buddyModel = provider.name;
   const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
+  if (args['fresh-thread'] === 'true' && !provider.supportsFreshThread) {
+    output({
+      status: 'error',
+      model: buddyModel,
+      message: '--fresh-thread is only supported by the codex broker transport; kimi is exec-only.',
+    });
+    return;
+  }
 
   // ── Kimi probe branch ────────────────────────────────────────────────────
   if (buddyModel === 'kimi') {
@@ -246,10 +252,10 @@ async function actionProbe(args) {
     }, ev.prompt);
 
     // Preflight: fail fast if kimi is not installed (avoids silent verified-on-failure)
-    const kimiCheck = kimiPreflight();
-    if (!kimiCheck.ok) {
+    const kimiCheck = provider.preflight();
+    if (kimiCheck.status !== 'ok') {
       output({ status: 'error', rule: 'kimi-unavailable',
-               message: `Kimi CLI not available: ${kimiCheck.error}` });
+               message: kimiCheck.message });
       return;
     }
 
@@ -393,6 +399,9 @@ async function actionProbe(args) {
           }));
 
   const runtimeLabel = useBroker ? 'broker' : (useAppServer ? 'app-server' : 'exec');
+  let actualRuntimeLabel = runtimeLabel;
+  let brokerFallback = false;
+  let brokerFallbackReason = null;
   process.stderr.write(`[buddy] probe started, runtime=${runtimeLabel}, sid=${buddySessionId}, ETA 30-80s\n`);
 
   try {
@@ -400,47 +409,73 @@ async function actionProbe(args) {
     let codexSessionId;
     let firstByteMs = null;
     if (useBroker) {
-      // W6.5: topic-drift tripwire — compare last task with current before reusing thread.
-      const prevTask = freshThread ? null : loadBrokerLastTask(buddySessionId, args['project-dir']);
-      const { warning: driftWarning } = checkTopicDrift(prevTask, prompt);
-      if (driftWarning) process.stderr.write(driftWarning + '\n');
+      try {
+        if (process.env.BUDDY_FORCE_BROKER_STARTUP_ERROR) {
+          throw new Error(process.env.BUDDY_FORCE_BROKER_STARTUP_ERROR);
+        }
+        // W6.5: topic-drift tripwire — compare last task with current before reusing thread.
+        const prevTask = freshThread ? null : loadBrokerLastTask(buddySessionId, args['project-dir']);
+        const { warning: driftWarning } = checkTopicDrift(prevTask, prompt);
+        if (driftWarning) process.stderr.write(driftWarning + '\n');
 
-      // Pre-W8 conv thread: stored per (buddy session, worktree). --fresh-thread bypasses.
-      const persistedThread = freshThread
-        ? null
-        : loadBrokerThread(buddySessionId, args['project-dir']);
-      // Ensure broker is up (lazy spawn, reuses live broker).
-      const brokerResult = await spawnBroker({ projectRoot: args['project-dir'] });
-      const { paths: brokerPaths } = brokerResult;
-      // UX: tell user whether broker was just spawned or reused.
-      if (brokerResult.reused === false) {
-        process.stderr.write(`[buddy] broker spawned, ready (pid=${brokerResult.pid})\n`);
-      } else if (persistedThread) {
-        process.stderr.write(`[buddy] reusing thread ${persistedThread}\n`);
-      }
-      const outputSchemaObj = schemaFile
-        ? (() => { try { return JSON.parse(fs.readFileSync(schemaFile, 'utf8')); } catch { return null; } })()
-        : null;
-      // stage6b: use official streaming protocol (turn/start) via runBrokerTurn
-      const r = await runBrokerTurn(brokerPaths, {
-        prompt: trimPrompt(prompt),
-        projectDir: args['project-dir'],
-        model: args.model || null,
-        outputSchema: outputSchemaObj,
-        ephemeral,
-        threadId: persistedThread,
-      });
-      fs.writeFileSync(outputFile, r.finalMessage || '');
-      codexSessionId = r.threadId || null;
-      firstByteMs = typeof r.first_byte_ms === 'number' ? r.first_byte_ms : null;
-      // Persist threadId + first-line task for next probe (W6.5 drift check).
-      if (!freshThread && codexSessionId) {
-        saveBrokerThread(buddySessionId, args['project-dir'], codexSessionId, undefined, prompt.split('\n')[0]);
-      } else if (freshThread) {
-        // Defensive: if user toggled --fresh-thread, also drop any previous
-        // persisted thread so the next default probe doesn't accidentally
-        // resume the freshly forked one.
-        clearBrokerThread(buddySessionId, args['project-dir']);
+        // Pre-W8 conv thread: stored per (buddy session, worktree). --fresh-thread bypasses.
+        const persistedThread = freshThread
+          ? null
+          : loadBrokerThread(buddySessionId, args['project-dir']);
+        // Ensure broker is up (lazy spawn, reuses live broker).
+        const brokerResult = await spawnBroker({ projectRoot: args['project-dir'] });
+        const { paths: brokerPaths } = brokerResult;
+        // UX: tell user whether broker was just spawned or reused.
+        if (brokerResult.reused === false) {
+          process.stderr.write(`[buddy] broker spawned, ready (pid=${brokerResult.pid})\n`);
+        } else if (persistedThread) {
+          process.stderr.write(`[buddy] reusing thread ${persistedThread}\n`);
+        }
+        const outputSchemaObj = schemaFile
+          ? (() => { try { return JSON.parse(fs.readFileSync(schemaFile, 'utf8')); } catch { return null; } })()
+          : null;
+        // stage6b: use official streaming protocol (turn/start) via runBrokerTurn
+        const r = await runBrokerTurn(brokerPaths, {
+          prompt: trimPrompt(prompt),
+          projectDir: args['project-dir'],
+          model: args.model || null,
+          outputSchema: outputSchemaObj,
+          ephemeral,
+          threadId: persistedThread,
+        });
+        fs.writeFileSync(outputFile, r.finalMessage || '');
+        codexSessionId = r.threadId || null;
+        firstByteMs = typeof r.first_byte_ms === 'number' ? r.first_byte_ms : null;
+        // Persist threadId + first-line task for next probe (W6.5 drift check).
+        if (!freshThread && codexSessionId) {
+          saveBrokerThread(buddySessionId, args['project-dir'], codexSessionId, undefined, prompt.split('\n')[0]);
+        } else if (freshThread) {
+          // Defensive: if user toggled --fresh-thread, also drop any previous
+          // persisted thread so the next default probe doesn't accidentally
+          // resume the freshly forked one.
+          clearBrokerThread(buddySessionId, args['project-dir']);
+        }
+      } catch (brokerErr) {
+        if (!shouldFallbackFromBrokerError(brokerErr)) throw brokerErr;
+        brokerFallback = true;
+        brokerFallbackReason = brokerErr.message.split('\n')[0];
+        actualRuntimeLabel = 'exec';
+        process.stderr.write(`[buddy] broker unavailable, falling back to exec: ${brokerFallbackReason}\n`);
+        const fallbackCmd = buildProbeArgs({
+          projectDir: args['project-dir'],
+          outputFile,
+          prompt,
+          model: args.model || null,
+          ephemeral,
+          outputSchema: schemaFile,
+        });
+        const execOutput = await execCodex(fallbackCmd, {
+          onFirstByte: (ms) => { firstByteMs = ms; },
+        });
+        codexSessionId = ephemeral
+          ? null
+          : (parseSessionId(execOutput)
+             || parseSessionIdFromSessions(Math.max(60_000, Date.now() - probeStartTime + 5000)));
       }
     } else if (useAppServer) {
       // app-server expects outputSchema as a parsed JSON object, not a file path.
@@ -473,7 +508,7 @@ async function actionProbe(args) {
     // C3 fix: broker thread IDs (thr-N, app-server namespace) must never be
     // written into the exec-mode session pointer (loadSession / saveSession).
     // Mixing namespaces causes actionFollowup to `codex exec resume thr-N`.
-    if (!useBroker) {
+    if (actualRuntimeLabel !== 'broker') {
       if (codexSessionId) {
         saveSession(codexSessionId);
         if (isConversation) saveConversationSession(buddySessionId, codexSessionId);
@@ -509,7 +544,9 @@ async function actionProbe(args) {
     appendSessionEvent(buddySessionId, verificationTaskId, 'probe.codex_output', {
       codex_session_id: codexSessionId,
       ephemeral,
-      runtime: runtimeLabel,
+      runtime: actualRuntimeLabel,
+      broker_fallback: brokerFallback,
+      broker_fallback_reason: brokerFallbackReason,
       parse_mode: parsed.mode,
       verdict: parsed.data?.verdict || null,
       latency_ms: latencyMs,
@@ -533,7 +570,9 @@ async function actionProbe(args) {
       codex_session_id: codexSessionId,
       ephemeral,
       session_policy: sessionPolicy,
-      runtime: runtimeLabel,
+      runtime: actualRuntimeLabel,
+      broker_fallback: brokerFallback,
+      broker_fallback_reason: brokerFallbackReason,
       resumed: !!resumedSessionId,
       followup_available: !ephemeral && !!codexSessionId,
       followup_recommended: followupRecommended,

@@ -1,13 +1,35 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = path.resolve(__dirname, '..', 'buddy-runtime.mjs');
+let TEST_HOME;
+let PREV_BUDDY_HOME;
+let PREV_HOME;
+let CAN_USE_UNIX_SOCKETS = false;
+
+before(async () => {
+  PREV_BUDDY_HOME = process.env.BUDDY_HOME;
+  PREV_HOME = process.env.HOME;
+  TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-runtime-home-'));
+  process.env.BUDDY_HOME = path.join(TEST_HOME, '.buddy');
+  process.env.HOME = TEST_HOME;
+  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport();
+});
+
+after(() => {
+  if (PREV_BUDDY_HOME === undefined) delete process.env.BUDDY_HOME;
+  else process.env.BUDDY_HOME = PREV_BUDDY_HOME;
+  if (PREV_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = PREV_HOME;
+  fs.rmSync(TEST_HOME, { recursive: true, force: true });
+});
 
 describe('buddy-runtime CLI', () => {
   test('--action preflight returns JSON status', () => {
@@ -210,7 +232,8 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     assert.equal(json.structured?.verdict, 'proceed');
   });
 
-  test('--action probe with BUDDY_USE_BROKER=1 routes through broker, persists threadId', () => {
+  test('--action probe with BUDDY_USE_BROKER=1 routes through broker, persists threadId', (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const evidence = path.join(os.tmpdir(), `w8-evidence-${Date.now()}.txt`);
     fs.writeFileSync(evidence, 'task_to_judge: broker test\nraw_evidence: x\nknown_omissions: none\n');
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-w8-'));
@@ -274,7 +297,8 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     }
   });
 
-  test('C3: broker probe must NOT write exec session pointer (saveSession)', () => {
+  test('C3: broker probe must NOT write exec session pointer (saveSession)', (t) => {
+    if (!CAN_USE_UNIX_SOCKETS) return t.skip('Unix sockets are unavailable in this sandbox');
     const evidence = path.join(os.tmpdir(), `c3-evidence-${Date.now()}.txt`);
     fs.writeFileSync(evidence, 'task_to_judge: C3 test\nraw_evidence: x\nknown_omissions: none\n');
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-c3-'));
@@ -364,7 +388,94 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     assert.equal(json.status, 'error');
     assert.match(json.message, /Evidence not found/);
   });
+
+  test('--action probe falls back to exec when broker startup is unavailable', () => {
+    const evidence = path.join(os.tmpdir(), `fallback-evidence-${Date.now()}.txt`);
+    fs.writeFileSync(evidence, 'task_to_judge: fallback test\nraw_evidence: x\nknown_omissions: none\n');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-fallback-'));
+    try {
+      const r = spawnSync(
+        'node',
+        [RUNTIME, '--action', 'probe', '--evidence', evidence, '--project-dir', '/tmp',
+         '--session-id', `fallback-${Date.now()}`],
+        {
+          encoding: 'utf8',
+          timeout: 20000,
+          env: {
+            ...process.env,
+            BUDDY_STUB_CODEX: '1',
+            BUDDY_USE_BROKER: '1',
+            BUDDY_HOME: tmpHome,
+            BUDDY_FORCE_BROKER_STARTUP_ERROR: 'listen EPERM: operation not permitted',
+          },
+        },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.runtime, 'exec');
+      assert.equal(json.broker_fallback, true);
+      assert.match(json.broker_fallback_reason, /EPERM/);
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('--action probe rejects --fresh-thread for kimi provider', () => {
+    const evidence = path.join(os.tmpdir(), `kimi-fresh-${Date.now()}.txt`);
+    fs.writeFileSync(evidence, 'task_to_judge: kimi fresh-thread\nraw_evidence: x\nknown_omissions: none\n');
+    try {
+      const r = spawnSync(
+        'node',
+        [RUNTIME, '--action', 'probe', '--buddy-model', 'kimi', '--fresh-thread',
+         '--evidence', evidence, '--project-dir', '/tmp'],
+        { encoding: 'utf8', timeout: 10000, env: { ...process.env } },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'error');
+      assert.match(json.message, /--fresh-thread.*codex broker/i);
+    } finally {
+      fs.rmSync(evidence, { force: true });
+    }
+  });
+
+  test('--action probe with kimi reports unavailable cleanly when CLI is missing', () => {
+    const evidence = path.join(os.tmpdir(), `kimi-missing-${Date.now()}.txt`);
+    fs.writeFileSync(evidence, 'task_to_judge: kimi missing\nraw_evidence: x\nknown_omissions: none\n');
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'probe', '--buddy-model', 'kimi',
+         '--evidence', evidence, '--project-dir', '/tmp'],
+        { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: '/usr/bin:/bin' } },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'error');
+      assert.equal(json.rule, 'kimi-unavailable');
+      assert.doesNotMatch(json.message, /ReferenceError|kimiPreflight/);
+    } finally {
+      fs.rmSync(evidence, { force: true });
+    }
+  });
 });
+
+function checkUnixSocketSupport() {
+  const sockPath = path.join(os.tmpdir(), `buddy-runtime-socket-check-${process.pid}-${Date.now()}.sock`);
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try { server.close(); } catch {}
+      try { fs.unlinkSync(sockPath); } catch {}
+      resolve(ok);
+    };
+    server.once('listening', () => finish(true));
+    server.once('error', () => finish(false));
+    server.listen(sockPath);
+  });
+}
 
 describe('session policy helpers', () => {
   test('saveConversationSession + loadConversationSession round-trip', async () => {
