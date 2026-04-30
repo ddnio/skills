@@ -61,11 +61,11 @@ NONE
 
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
-W-015
+NONE
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-W-016 (perf optimization) completed; W-015 is the next open item
+All v3.1.0 work_queue items completed (W-014/015/016/017 all done)
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->
@@ -77,7 +77,7 @@ NONE
 
 ## last_round_outcome
 <!-- FIXED | VALIDATED | NO_OP | REGRESSED | UNCERTAIN -->
-VALIDATED
+FIXED
 
 ## last_round_notes
-v3.0.1: W-014 e2e validation passed (5/5). Fixed 3 bugs found during validation: execFileSync→async spawn+5min watchdog (ETIMEDOUT fix), SKILL.md CLAUDE_PLUGIN_ROOT→SKILL_DIR placeholder, parseArgs empty checks handling. Codex review confirmed watchdog necessity.
+v3.1.0: broker hardening (SIGTERM timeout, server.on('error'), writePidFile ordering); isBrokerAlive PID fallback removed (OS reuse risk); C2 concurrent test fixed (Promise.allSettled); W-015 PreToolUse advisory hook implemented; SESSION_HANDOFF.md migrated to ~/.buddy/handoff-<hash>.md (out of git). 112/112 tests pass.

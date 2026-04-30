@@ -100,6 +100,6 @@ verdict: caution | 关键发现：C2 teardown 不能清学习数据，C7 SESSION
 
 ## 后续待处理
 
-- [ ] SESSION_HANDOFF.md 移出 git 跟踪目录（C7，迁移到 `CLAUDE_PLUGIN_DATA` 或临时路径）
-- [ ] L3 重新验证：改后跑真实 probe，确认新路径格式写入
-- [ ] Stop hook（W-015）：opt-in review gate，按官方 stop-review-gate-hook.mjs 模式
+- [x] SESSION_HANDOFF.md 移出 git 跟踪目录 — **Stage6c (commit 70e775a) 已关闭**：git rm --cached，读路径改为 `~/.buddy/handoff-<cwdHash8>.md`，legacy fallback 保留
+- [x] L3 重新验证：probe 实测写入确认 ✅（sessions/buddy-bc506228.jsonl，22 事件）
+- [x] Stop hook（W-015）— **Stage6c (commit 70e775a) 已关闭**：PreToolUse advisory hook，不是 gate 模式，符合实际需求

@@ -145,3 +145,4 @@ Codex 没有新发现 → 写 `no-op`，不编造。
 5. 证据脱敏：传原始证据前去除 secret/token/credential/cookie
 6. 不传 `--model`：默认不加 `--model`；仅用户明确要求时才传
 7. Broker 模式（**默认启用**，W7-W8）：常驻 codex app-server，跨 probe 复用持久 thread；`--fresh-thread` 重置（跨主题必须，否则 codex 有记忆可能污染）；`BUDDY_USE_LEGACY_EXEC=1` 或 `BUDDY_USE_BROKER=0` 回退到 exec 模式；`BUDDY_USE_APP_SERVER=1` 走 spawn-per-call（opt-in）
+8. PreToolUse advisory：`rm -rf`/DROP/force-push/reset --hard 等破坏性 Bash 操作自动注入 codex-buddy 验证提醒（V3 floor rule）

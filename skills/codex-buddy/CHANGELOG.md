@@ -4,6 +4,24 @@
 
 ---
 
+## Stage 6c — 2026-04-30 broker 健壮性 + W-015 + SESSION_HANDOFF 迁移
+
+### Content
+- **`buddy-broker-process.mjs`**：SIGTERM/SIGINT 加 3s hard-exit timeout；`server.on('error')` 处理 EADDRINUSE；`writePidFile` 移到 `'listening'` 回调防 bind 失败留孤立 pid；Usage 文件名修正
+- **`buddy-broker.mjs`**：`isBrokerAlive` 删除 PID fallback（OS PID 复用导致误判 alive）；删除孤儿函数 `isProcessAlive`
+- **`buddy-broker.test.mjs`**：C2 并发测试改为 `Promise.allSettled`，真正验证 BROKER_BUSY 路径
+- **`hooks/pre-tool` + `hooks.json`**：W-015 PreToolUse advisory hook — 破坏性 Bash 操作（rm -rf/DROP/force-push/reset --hard）自动注入 codex-buddy 验证提醒
+- **`hooks/session-start`**：SESSION_HANDOFF 读路径改为 `~/.buddy/handoff-<cwdHash8>.md`（主），legacy `docs/SESSION_HANDOFF.md` 作迁移 fallback
+- **`docs/SESSION_HANDOFF.md`**：git rm --cached；加入 .gitignore（不再 git 跟踪）
+- **`scripts/verify-repo.sh`**：移除 `docs/SESSION_HANDOFF.md` 必需文件检查
+
+### Codex probe 记录
+- broker hardening + 整体质量 review：2 轮 probe（vtask-mol4pjvv, vtask-mol6xf82）发现 stale PID reuse / C2 test sequential / W-017 STATUS 漂移
+- W-015/SESSION_HANDOFF 决策：verdict=stop，两项均为 v3.1.0 merge 阻断项
+- 合并就绪评估：verdict=stop，6 处问题（verify 失败/CHANGELOG/SKILL.md/STATUS 漂移/decision docs 收口/sync 策略）
+
+---
+
 ## Stage 6b — 2026-04-30 官方 broker 实现替换
 
 ### Background
