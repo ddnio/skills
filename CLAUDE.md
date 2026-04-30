@@ -9,7 +9,11 @@
 维护并分发 buddy 系列 skills —— 跨模型验证协作的 Claude Code 插件集合。
 
 **当前 skills：**
-- `codex-buddy` — Claude 与 Codex 跨模型验证
+- `codex-buddy` — Claude 与 Codex/Kimi 跨模型验证（`--buddy-model kimi` 按需切换）
+
+**外部文档参考：**
+- Kimi CLI: https://moonshotai.github.io/kimi-cli/ · [GitHub](https://github.com/MoonshotAI/kimi-cli)
+- Agent Skills 规范: https://agentskills.io/home
 
 ---
 

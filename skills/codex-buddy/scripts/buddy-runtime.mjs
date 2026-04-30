@@ -28,6 +28,7 @@ import {
   saveConversationSession, loadConversationSession,
   trimPrompt,
 } from './lib/codex-adapter.mjs';
+import { execKimi, preflight as kimiPreflight } from './lib/kimi-adapter.mjs';
 import { runAppServerTurn } from './lib/codex-app-server.mjs';
 import {
   spawnBroker, runBrokerTurn,
@@ -140,12 +141,30 @@ async function loadEvidence(args) {
 }
 
 async function actionPreflight(args) {
-  const codexAvailable = checkCodexAvailable();
+  const buddyModel = args['buddy-model'] || 'codex';
   const lookup = args['project-dir'] ? { cwd: args['project-dir'] } : {};
   const buddySessionId = loadBuddySession(lookup);
+
+  if (buddyModel === 'kimi') {
+    const kimi = kimiPreflight();
+    output({
+      status: kimi.ok ? 'ok' : 'error',
+      kimi_available: kimi.ok,
+      kimi_version: kimi.version,
+      model: 'kimi',
+      call_count: buddySessionId ? getCallCount(logFilePath(), buddySessionId) : 0,
+      message: kimi.ok
+        ? `Kimi CLI ready (${kimi.version})`
+        : `Kimi CLI not found or failed: ${kimi.error}. Install: https://moonshotai.github.io/kimi-cli/`,
+    });
+    return;
+  }
+
+  const codexAvailable = checkCodexAvailable();
   output({
     status: codexAvailable ? 'ok' : 'error',
     codex_available: codexAvailable,
+    model: 'codex',
     call_count: buddySessionId ? getCallCount(logFilePath(), buddySessionId) : 0,
     message: codexAvailable ? 'Codex CLI ready' : 'Codex CLI not found. Install: npm i -g @openai/codex',
   });
@@ -190,6 +209,7 @@ async function actionLocal(args) {
     action: 'local',
     verificationTaskId: localTaskId,
     latencyMs,
+    model: 'codex',
   });
 
   output({
@@ -206,7 +226,111 @@ async function actionLocal(args) {
 
 async function actionProbe(args) {
   const startTime = Date.now();
+  const buddyModel = args['buddy-model'] || 'codex';
   const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
+
+  // ── Kimi probe branch ────────────────────────────────────────────────────
+  if (buddyModel === 'kimi') {
+    const ev = await loadEvidence(args);
+    if (!ev.ok) {
+      output({ status: 'error', message: ev.error });
+      return;
+    }
+    const verificationTaskId = args['verification-task-id'] || newVerificationTaskId();
+    appendSessionEvent(buddySessionId, verificationTaskId, 'probe.start', {
+      evidence_source: ev.source,
+      project_dir: args['project-dir'],
+      model: 'kimi',
+      rule: args.rule || 'vlevel:V2',
+      level: args.level || 'V2',
+    }, ev.prompt);
+
+    // Preflight: fail fast if kimi is not installed (avoids silent verified-on-failure)
+    const kimiCheck = kimiPreflight();
+    if (!kimiCheck.ok) {
+      output({ status: 'error', rule: 'kimi-unavailable',
+               message: `Kimi CLI not available: ${kimiCheck.error}` });
+      return;
+    }
+
+    process.stderr.write(`[buddy] kimi probe started, sid=${buddySessionId}, ETA 30-80s\n`);
+    const kimiResult = execKimi(ev.prompt, {
+      projectDir: args['project-dir'],
+      model: args.model || undefined,
+    });
+
+    // Fail if kimi failed to spawn (system error, e.g. ENOENT)
+    if (kimiResult.spawnError) {
+      output({ status: 'error', rule: 'kimi-spawn-failed',
+               message: `Kimi spawn error: ${kimiResult.spawnError}` });
+      return;
+    }
+    const latencyMs = Date.now() - startTime;
+
+    // ThinkPart → session log (audit only, not in synthesis)
+    if (kimiResult.parsed.think?.length) {
+      appendSessionEvent(buddySessionId, verificationTaskId, 'probe.kimi_think', {
+        think_parts: kimiResult.parsed.think,
+        kimi_session_id: kimiResult.parsed.sessionId,
+        parse_status: kimiResult.parseStatus,
+      });
+    }
+
+    // Synthesis content: TextPart if parsed ok/partial, raw fallback if failed
+    const synthesisContent = kimiResult.parseStatus !== 'failed'
+      ? kimiResult.parsed.text.join('\n\n')
+      : kimiResult.raw;
+    const fallback = kimiResult.parseStatus !== 'failed' ? 'none' : 'raw';
+
+    const envelope = createEnvelope({
+      turn: parseInt(args.turn) || 0,
+      level: args.level || 'V2',
+      rule: args.rule || 'vlevel:V2',
+      route: 'kimi',
+      evidence: [`kimi: ${synthesisContent.slice(0, 1000)}`],
+      conclusion: 'needs-review',
+    });
+
+    appendLog(logFilePath(), {
+      envelope,
+      buddySessionId,
+      workspace: args['project-dir'],
+      action: 'probe',
+      verificationTaskId,
+      latencyMs,
+      model: 'kimi',
+      parseStatus: kimiResult.parseStatus,
+      fallback,
+    });
+
+    appendSessionEvent(buddySessionId, verificationTaskId, 'probe.kimi_output', {
+      kimi_session_id: kimiResult.parsed.sessionId,
+      parse_status: kimiResult.parseStatus,
+      fallback,
+      parser_version: kimiResult.parserVersion,
+      exit_code: kimiResult.exitCode,
+      latency_ms: latencyMs,
+    }, synthesisContent);
+
+    process.stderr.write(`[buddy] kimi probe completed in ${latencyMs}ms, parse_status=${kimiResult.parseStatus}\n`);
+    output({
+      status: 'verified',
+      rule: envelope.rule,
+      route: 'kimi',
+      model: 'kimi',
+      evidence_summary: envelope.evidence,
+      conclusion: envelope.conclusion,
+      session_id: buddySessionId,
+      verification_task_id: verificationTaskId,
+      kimi_session_id: kimiResult.parsed.sessionId,
+      parse_status: kimiResult.parseStatus,
+      fallback,
+      call_count: getCallCount(logFilePath(), buddySessionId),
+    });
+    return;
+  }
+  // ── End Kimi branch ──────────────────────────────────────────────────────
+
   if (process.env.BUDDY_STUB_CODEX !== '1' && !checkCodexAvailable()) {
     output({ status: 'error', rule: 'codex-unavailable', message: 'Codex CLI not found' });
     return;
@@ -379,6 +503,7 @@ async function actionProbe(args) {
       action: 'probe',
       verificationTaskId,
       latencyMs,
+      model: 'codex',
     });
 
     appendSessionEvent(buddySessionId, verificationTaskId, 'probe.codex_output', {
@@ -513,6 +638,7 @@ async function actionFollowup(args) {
       action: 'followup',
       verificationTaskId,
       latencyMs,
+      model: 'codex',
     });
 
     appendSessionEvent(buddySessionId, verificationTaskId, 'followup.codex_output', {

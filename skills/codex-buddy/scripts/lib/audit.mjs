@@ -48,12 +48,16 @@ function pickEnvelope(envelope) {
  * @param {string} opts.verificationTaskId       — required in v2 (string, never null)
  * @param {number} [opts.latencyMs]
  * @param {string} [opts.message]
+ * @param {string} [opts.model]       — 'codex' | 'kimi' (multi-model routing)
+ * @param {string} [opts.parseStatus] — 'ok' | 'partial' | 'failed' (Kimi parser status)
+ * @param {string} [opts.fallback]    — 'none' | 'raw' (whether synthesis used raw fallback)
  */
 export function appendLog(logFile, opts) {
   if (!opts || typeof opts !== 'object') {
     throw new TypeError('appendLog: options object required');
   }
-  const { envelope, buddySessionId, workspace, action, verificationTaskId, latencyMs, message } = opts;
+  const { envelope, buddySessionId, workspace, action, verificationTaskId,
+          latencyMs, message, model, parseStatus, fallback } = opts;
 
   if (!buddySessionId)     throw new TypeError('appendLog: buddySessionId required');
   if (!workspace)          throw new TypeError('appendLog: workspace required');
@@ -76,6 +80,9 @@ export function appendLog(logFile, opts) {
   };
   if (latencyMs !== undefined) row.latency_ms = latencyMs;
   if (message !== undefined && message !== null) row.message = String(message);
+  if (model !== undefined) row.model = model;
+  if (parseStatus !== undefined) row.parse_status = parseStatus;
+  if (fallback !== undefined) row.fallback = fallback;
 
   fs.appendFileSync(logFile, JSON.stringify(row) + '\n');
 }
@@ -94,7 +101,7 @@ export function getCallCount(logFile, buddySessionId) {
   return lines.reduce((count, line) => {
     let entry;
     try { entry = JSON.parse(line); } catch { return count; }
-    if (entrySessionId(entry) === buddySessionId && (entry.route === 'codex' || entry.route === 'both')) {
+    if (entrySessionId(entry) === buddySessionId && (entry.route === 'codex' || entry.route === 'both' || entry.route === 'kimi')) {
       return count + 1;
     }
     return count;
