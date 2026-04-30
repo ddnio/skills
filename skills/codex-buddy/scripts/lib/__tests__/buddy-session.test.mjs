@@ -1,4 +1,4 @@
-// Stage5e: per-cwd buddy_session_id isolation tests.
+// Stage6a: per-cwd buddy_session_id isolation tests (updated for official path pattern).
 // Validates that loadBuddySession/saveBuddySession route by cwd and never
 // let two concurrent worktrees share the same buddy session id via
 // the global ~/.buddy/buddy-session.json pointer.
@@ -8,13 +8,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 
 import { saveBuddySession, loadBuddySession } from '../codex-adapter.mjs';
-
-function cwdHash(cwd) {
-  return crypto.createHash('sha256').update(cwd).digest('hex').slice(0, 8);
-}
+import { resolveBuddySessionFile } from '../paths.mjs';
 
 describe('buddy session id isolation (stage5e)', () => {
   let tmpHome;
@@ -44,13 +40,16 @@ describe('buddy session id isolation (stage5e)', () => {
     assert.equal(loadBuddySession({ cwd: '/path/to/worktree-B' }), 'buddy-bbb');
   });
 
-  test('per-cwd file written under state/by-cwd/<hash>.json', () => {
+  test('per-cwd file written under state/<slug>-<hash16>/buddy-session.json (stage6a)', () => {
     saveBuddySession('buddy-xyz', { cwd: '/some/repo' });
-    const file = path.join(process.env.BUDDY_HOME, 'state', 'by-cwd', `${cwdHash('/some/repo')}.json`);
+    const file = resolveBuddySessionFile('/some/repo');
     assert.ok(fs.existsSync(file), `expected per-cwd file at ${file}`);
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(data.buddy_session_id, 'buddy-xyz');
     assert.equal(data.cwd, '/some/repo');
+    // Verify new path format: must NOT use the old by-cwd/<hash8> layout.
+    assert.ok(!file.includes('by-cwd'), `path should not use legacy by-cwd layout, got: ${file}`);
+    assert.ok(file.endsWith('buddy-session.json'), `file should be named buddy-session.json, got: ${file}`);
   });
 
   test('legacy global pointer still written for back-compat', () => {
