@@ -60,14 +60,40 @@ async function main() {
     case 'status': {
       const alive = await isBrokerAlive(paths);
       if (!alive) {
-        emit({ status: 'ok', action: 'status', alive: false, paths });
+        emit({
+          status: 'ok',
+          action: 'status',
+          alive: false,
+          pid_file_present: fs.existsSync(paths.pidPath),
+          socket_file_present: fs.existsSync(paths.sockPath),
+          paths,
+        });
         return;
       }
       try {
-        const reply = await sendCommand(paths, { method: 'status' });
-        emit({ status: 'ok', action: 'status', alive: true, info: reply.result || reply, paths });
+        const reply = await sendCommand(paths, {
+          method: 'initialize',
+          params: { clientInfo: { title: 'codex-buddy-cli', name: 'codex-buddy', version: '1.0.0' } },
+        });
+        emit({
+          status: 'ok',
+          action: 'status',
+          alive: true,
+          pid_file_present: fs.existsSync(paths.pidPath),
+          socket_file_present: fs.existsSync(paths.sockPath),
+          user_agent: reply.result?.userAgent || null,
+          paths,
+        });
       } catch (e) {
-        emit({ status: 'ok', action: 'status', alive: true, info: { error: e.message }, paths });
+        emit({
+          status: 'degraded',
+          action: 'status',
+          alive: true,
+          pid_file_present: fs.existsSync(paths.pidPath),
+          socket_file_present: fs.existsSync(paths.sockPath),
+          last_error: e.message,
+          paths,
+        });
       }
       return;
     }
