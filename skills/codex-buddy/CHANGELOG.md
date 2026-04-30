@@ -4,6 +4,41 @@
 
 ---
 
+## Stage 5e — 2026-04-30 Per-worktree session isolation + handoff injection
+
+### Background
+Reported bug: two concurrent Claude sessions in different worktrees both saw the same `buddy_session_id` (e.g. `buddy-0eafec6c`) because `~/.buddy/buddy-session.json` is a global mutable pointer overwritten by whichever SessionStart hook fires last. Stats got polluted across worktrees; not a functional break but a real architectural smell.
+
+### Codex framing
+"Global storage is OK; global mutable *current pointer* is not." Reference: Git keeps repo state shared but `HEAD`/`index`/`config.worktree` per-worktree. Terraform: `.terraform/`+`TF_DATA_DIR` per working dir. The minimal fix is to remove the global pointer and key routing by `(session_id, cwd)`.
+
+### Content
+- **Per-worktree state file** (`~/.buddy/state/by-cwd/<sha256(cwd)[:8]>.json`):
+  - `saveBuddySession(sid, { cwd })` writes here as primary; legacy `~/.buddy/buddy-session.json` still updated for back-compat with older code paths.
+  - `loadBuddySession({ cwd })` prefers per-cwd, falls back to legacy global file when missing → no breakage on machines with pre-stage5e data.
+- **`getOrCreateBuddySessionId(argsSessionId, cwd)`** in buddy-runtime: 6 call sites updated to pass `args['project-dir']` so each worktree gets its own sid.
+- **SessionStart hook** rewritten:
+  - Parses `cwd` from hook stdin (Claude Code passes it in JSON envelope).
+  - Computes `cwd_hash` and writes the per-cwd state file (primary) + legacy file (compat).
+  - Reads `<cwd>/docs/SESSION_HANDOFF.md` if present and prepends as `<SESSION_HANDOFF>...</SESSION_HANDOFF>` block in `additionalContext` BEFORE the SKILL.md block. Capped at 8KB.
+- **`docs/SESSION_HANDOFF.md`** is the convention file. Update at end of working session; next Claude session auto-reads it. This file ALSO lives in tracked git history so the worktree itself carries handoff state across machines/branches.
+- **`scripts/lib/__tests__/buddy-session.test.mjs`**: 7 new tests cover save/load round-trip, two-worktree isolation, per-cwd file location, legacy fallback chain.
+- **verify-repo.sh** now checks `docs/SESSION_HANDOFF.md` exists.
+
+### Tests
+94 → 101 (+7 buddy-session tests). All pass. Hook smoke test: handoff injection works; 3 different cwds → 3 different state files (no collision).
+
+### Codex Interaction
+- One probe (caution → 3 high-confidence findings, all confirming Claude's framing).
+- Codex's specific contribution beyond Claude's draft: pointed out that Claude Code's hook stdin already provides `session_id` + `cwd` + `transcript_path`, and `additionalContext` is the documented handoff channel — so we don't need extra plumbing. Codex also explicitly identified the antipattern: not "global storage" but "global mutable current pointer".
+
+### Skipped (intentional)
+- **Deleting legacy `buddy-session.json`**: kept for back-compat read; will retire after a few weeks of v2 usage.
+- **Migrating existing `~/.buddy/sessions/<sid>.jsonl`** data: untouched (Codex F3: existing event streams stay valid; new index sits beside).
+- **Hashing by `(session_id, cwd)` jointly**: cwd alone is sufficient for the reported bug (different worktrees). Adding session_id would isolate concurrent Claude sessions in the SAME cwd — rare and not currently a concern.
+
+---
+
 ## Stage 5d — 2026-04-30 Strict v2 audit-row contract + shared annotation policy
 
 ### Content

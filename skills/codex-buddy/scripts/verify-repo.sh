@@ -299,6 +299,7 @@ V3_FILES=(
   "scripts/lib/annotations.mjs"
   "schemas/envelope.schema.json"
   "schemas/audit-row-v2.schema.json"
+  "docs/SESSION_HANDOFF.md"
 )
 for f in "${V3_FILES[@]}"; do
   [ -f "$SKILL_DIR/$f" ] && pass "$f" || fail "$f MISSING"

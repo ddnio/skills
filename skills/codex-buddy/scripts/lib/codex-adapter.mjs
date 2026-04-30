@@ -1,5 +1,7 @@
 import { execSync, spawn as nodeSpawn } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { getBuddyHome } from './paths.mjs';
 
 /** Max prompt size sent to Codex (chars). Larger prompts slow inference significantly. */
@@ -247,19 +249,46 @@ export function loadSession() {
 }
 
 /**
- * Save buddy session ID (distinct from Codex session ID).
- * Used for budget tracking across calls within one Claude session.
+ * Buddy session ID storage (stage5e):
+ *   PRIMARY:  ~/.buddy/state/by-cwd/<sha256(cwd)[:8]>.json — per-worktree, eliminates
+ *             cross-worktree "current pointer" race (Git/Terraform-style isolation).
+ *   FALLBACK: ~/.buddy/buddy-session.json — legacy global pointer (kept for back-compat
+ *             read; new writes ALSO update it so older runtimes / tools keep working).
+ *
+ * cwd is the worktree / project directory (passed via --project-dir, never inferred
+ * from process.cwd() since runtime can be invoked from any sub-dir).
  */
-export function saveBuddySession(buddySessionId) {
-  const dir = getBuddyHome();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(`${dir}/buddy-session.json`, JSON.stringify({ buddy_session_id: buddySessionId, updated: new Date().toISOString() }));
+function cwdHash(cwd) {
+  return crypto.createHash('sha256').update(String(cwd)).digest('hex').slice(0, 8);
 }
 
-/**
- * Load buddy session ID for budget tracking.
- */
-export function loadBuddySession() {
+function perCwdStateFile(cwd) {
+  return path.join(getBuddyHome(), 'state', 'by-cwd', `${cwdHash(cwd)}.json`);
+}
+
+export function saveBuddySession(buddySessionId, opts = {}) {
+  const dir = getBuddyHome();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const updated = new Date().toISOString();
+  // Primary: per-cwd state file (only if caller passed cwd).
+  if (opts && opts.cwd) {
+    const file = perCwdStateFile(opts.cwd);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ buddy_session_id: buddySessionId, cwd: opts.cwd, updated }));
+  }
+  // Compat: legacy global pointer; new writes still touch it so older code paths see it.
+  fs.writeFileSync(`${dir}/buddy-session.json`, JSON.stringify({ buddy_session_id: buddySessionId, updated }));
+}
+
+export function loadBuddySession(opts = {}) {
+  // Prefer per-cwd state (stage5e+).
+  if (opts && opts.cwd) {
+    const file = perCwdStateFile(opts.cwd);
+    if (fs.existsSync(file)) {
+      try { return JSON.parse(fs.readFileSync(file, 'utf8')).buddy_session_id; } catch { /* fallthrough */ }
+    }
+  }
+  // Fallback: legacy global pointer.
   const file = `${getBuddyHome()}/buddy-session.json`;
   if (!fs.existsSync(file)) return null;
   try {

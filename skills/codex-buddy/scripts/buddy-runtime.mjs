@@ -75,15 +75,17 @@ function hasQuestions(parsed, rawText) {
 
 /**
  * Get or create a persistent buddy session ID for audit tracking.
- * Unlike Codex session IDs (per-probe), this persists across all calls
- * in one Claude session for observability.
+ * stage5e: keyed by cwd (project-dir) so concurrent Claude sessions in
+ * different worktrees don't collide. cwd absent → falls back to legacy
+ * global file (loadBuddySession with no opts).
  */
-function getOrCreateBuddySessionId(argsSessionId) {
+function getOrCreateBuddySessionId(argsSessionId, cwd) {
   if (argsSessionId) return argsSessionId;
-  const existing = loadBuddySession();
+  const lookup = cwd ? { cwd } : {};
+  const existing = loadBuddySession(lookup);
   if (existing) return existing;
   const newId = `buddy-${crypto.randomUUID().slice(0, 8)}`;
-  saveBuddySession(newId);
+  saveBuddySession(newId, lookup);
   return newId;
 }
 
@@ -137,9 +139,10 @@ async function loadEvidence(args) {
   return { ok: true, prompt: fs.readFileSync(file, 'utf8'), source: file };
 }
 
-async function actionPreflight(_args) {
+async function actionPreflight(args) {
   const codexAvailable = checkCodexAvailable();
-  const buddySessionId = loadBuddySession();
+  const lookup = args['project-dir'] ? { cwd: args['project-dir'] } : {};
+  const buddySessionId = loadBuddySession(lookup);
   output({
     status: codexAvailable ? 'ok' : 'error',
     codex_available: codexAvailable,
@@ -167,7 +170,7 @@ async function actionLocal(args) {
     return;
   }
 
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
 
   const envelope = createEnvelope({
     turn: parseInt(args.turn) || 0,
@@ -203,7 +206,7 @@ async function actionLocal(args) {
 
 async function actionProbe(args) {
   const startTime = Date.now();
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
   if (process.env.BUDDY_STUB_CODEX !== '1' && !checkCodexAvailable()) {
     output({ status: 'error', rule: 'codex-unavailable', message: 'Codex CLI not found' });
     return;
@@ -446,7 +449,7 @@ function lookupCodexSessionByTaskId(buddySessionId, verificationTaskId) {
 
 // I3 fix: implement followup using buildResumeArgs + execCodex
 async function actionFollowup(args) {
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
   // Resolution order (most specific → least, to avoid global session.json overwrite race):
   //   1. --codex-session-id (explicit)
   //   2. --verification-task-id → look up codex_session_id from session log
@@ -550,7 +553,7 @@ async function actionFollowup(args) {
 // Annotate the most recent probe for a session with probe_found_new / user_adopted.
 // Claude calls this after synthesizing Codex output to record post-hoc metrics.
 async function actionAnnotate(args) {
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
   const { fields } = parseAnnotationFlags(args);
   if (!Object.keys(fields).length) {
     output({ status: 'error',
@@ -585,7 +588,7 @@ async function actionAnnotate(args) {
 // Allow Claude to log synthesis (or any post-hoc note) into the buddy session log.
 // Reads content from --content <file>, --content - (stdin), or --content-stdin.
 async function actionLogSynthesis(args) {
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
   const verificationTaskId = args['verification-task-id'] || 'unknown';
   let content = '';
   if (args['content-stdin'] === 'true' || args.content === '-') {
@@ -610,7 +613,7 @@ async function actionLogSynthesis(args) {
 // not fail-closed. Three kinds: vlevel-header / synthesis / narrate-discipline.
 const REPLY_KINDS = new Set(['vlevel-header', 'synthesis', 'narrate-discipline']);
 async function actionLogReply(args) {
-  const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
+  const buddySessionId = getOrCreateBuddySessionId(args['session-id'], args['project-dir']);
   const verificationTaskId = args['verification-task-id'] || 'unknown';
   const kind = args.kind;
   if (!REPLY_KINDS.has(kind)) {
