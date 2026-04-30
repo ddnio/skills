@@ -1,7 +1,7 @@
 ---
 name: codex-buddy
 description: >
-  Cross-model AI buddy for independent second opinions via Codex CLI.
+  Cross-model AI buddy for independent second opinions via provider CLIs.
   Use when Claude faces any nontrivial judgment, recommendation, critique,
   review, prioritization, tradeoff, or decision in any domain — not limited
   to specific scenarios. Covers: reviewing plans, docs, code, specs, rules,
