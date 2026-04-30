@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://buddy.nanafox.com/schemas/audit-row-v2.schema.json",
+  "title": "Buddy Audit Row (schema v2)",
+  "description": "Persisted decision-summary row in ~/.buddy/logs.jsonl. Schema v2 (2026-04-30): unified field names with the lifecycle event stream (session-log) and join-keyed by buddy_session_id + verification_task_id.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ts",
+    "buddy_session_id",
+    "verification_task_id",
+    "workspace",
+    "action",
+    "turn",
+    "level",
+    "rule",
+    "triggered",
+    "route",
+    "evidence",
+    "conclusion"
+  ],
+  "properties": {
+    "schema_version":       { "type": "integer", "const": 2 },
+    "ts":                   { "type": "string", "format": "date-time" },
+    "buddy_session_id":     { "type": "string", "minLength": 1 },
+    "verification_task_id": { "type": "string", "minLength": 1 },
+    "workspace":            { "type": "string", "minLength": 1 },
+    "action":               { "type": "string", "enum": ["local", "probe", "followup"] },
+    "latency_ms":           { "type": "number", "minimum": 0 },
+    "message":              { "type": "string" },
+    "turn":                 { "type": "integer", "minimum": 0 },
+    "level":                { "type": "string", "enum": ["V0", "V1", "V2", "V3"] },
+    "rule":                 { "type": "string", "minLength": 1 },
+    "triggered":            { "type": "boolean" },
+    "route":                { "type": "string", "enum": ["local", "codex", "both", "none"] },
+    "evidence":             { "type": "array", "items": { "type": "string" } },
+    "conclusion":           { "type": "string", "enum": ["proceed", "stop", "needs-evidence", "needs-review", "skipped"] },
+    "confidence":           { "type": "string", "enum": ["high", "medium", "low"] },
+    "unverified":           { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false,
+  "$comment": "verification_task_id is required (string, not nullable) in v2. Legacy logs.jsonl entries written before stage5b are NOT v2 audit rows and are not validated by this schema."
+}

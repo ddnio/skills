@@ -6,91 +6,89 @@ import os from 'node:os';
 
 import { appendLog, getCallCount, AUDIT_SCHEMA_VERSION } from '../audit.mjs';
 
-describe('audit', () => {
+describe('audit (v2 strict)', () => {
   let tmpDir;
   let logFile;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-audit-'));
-    logFile = path.join(tmpDir, 'decisions.jsonl');
+    logFile = path.join(tmpDir, 'logs.jsonl');
   });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  test('appendLog writes new schema fields (ts, buddy_session_id, schema_version, verification_task_id)', () => {
-    const envelope = { turn: 1, level: 'V2', rule: 'floor:correctness', triggered: true, route: 'codex', evidence: ['probe:ok'], conclusion: 'proceed' };
-    appendLog(logFile, envelope, 'buddy-001', '/tmp/project', 1234, {
+  test('appendLog writes a v2 row with required canonical fields', () => {
+    const envelope = { turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: ['ok'], conclusion: 'proceed' };
+    appendLog(logFile, {
+      envelope,
+      buddySessionId: 'buddy-001',
+      workspace: '/tmp/project',
       action: 'probe',
-      verification_task_id: 'vtask-abc-123',
+      verificationTaskId: 'vtask-abc',
+      latencyMs: 1234,
     });
-
-    const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n');
-    assert.equal(lines.length, 1);
-
-    const entry = JSON.parse(lines[0]);
-    assert.equal(entry.buddy_session_id, 'buddy-001', 'must use buddy_session_id, not session_id');
-    assert.ok(entry.ts, 'must have ts field');
-    assert.match(entry.ts, /^\d{4}-\d{2}-\d{2}T/, 'ts must be ISO timestamp');
-    assert.equal(entry.schema_version, AUDIT_SCHEMA_VERSION, 'must tag schema_version');
-    assert.equal(entry.verification_task_id, 'vtask-abc-123', 'must record verification_task_id for cross-stream join');
+    const entry = JSON.parse(fs.readFileSync(logFile, 'utf8').trim());
+    assert.equal(entry.schema_version, AUDIT_SCHEMA_VERSION);
+    assert.equal(entry.buddy_session_id, 'buddy-001');
+    assert.equal(entry.verification_task_id, 'vtask-abc');
     assert.equal(entry.workspace, '/tmp/project');
-    assert.equal(entry.latency_ms, 1234);
     assert.equal(entry.action, 'probe');
-
-    // Old field names must NOT be written (we cut over cleanly).
-    assert.equal(entry.session_id, undefined, 'legacy session_id must not be written');
-    assert.equal(entry.timestamp, undefined, 'legacy timestamp must not be written');
+    assert.equal(entry.latency_ms, 1234);
+    assert.match(entry.ts, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(entry.session_id, undefined);
+    assert.equal(entry.timestamp, undefined);
   });
 
-  test('appendLog tolerates missing verification_task_id (writes null)', () => {
-    appendLog(logFile, { turn: 0, route: 'local', conclusion: 'proceed' }, 'buddy-002', '/tmp', undefined, { action: 'local' });
-    const entry = JSON.parse(fs.readFileSync(logFile, 'utf8').trim());
-    assert.equal(entry.verification_task_id, null, 'missing verification_task_id is null, not undefined');
-    assert.equal(entry.buddy_session_id, 'buddy-002');
-  });
-
-  test('getCallCount counts codex calls by new field, with fallback to legacy session_id', () => {
-    // New schema entries
-    appendLog(logFile, { turn: 1, route: 'codex', conclusion: 'proceed' }, 'buddy-001', '/tmp', undefined, { verification_task_id: 'v1' });
-    appendLog(logFile, { turn: 2, route: 'local', conclusion: 'proceed' }, 'buddy-001', '/tmp', undefined, { verification_task_id: 'v2' });
-    appendLog(logFile, { turn: 3, route: 'codex', conclusion: 'proceed' }, 'buddy-001', '/tmp', undefined, { verification_task_id: 'v3' });
-
-    // Legacy entry (manually crafted to simulate pre-v2 data)
-    const legacyEntry = { turn: 4, route: 'codex', session_id: 'buddy-001', timestamp: '2026-01-01T00:00:00Z' };
-    fs.appendFileSync(logFile, JSON.stringify(legacyEntry) + '\n');
-
-    assert.equal(getCallCount(logFile, 'buddy-001'), 3, 'counts both new and legacy buddy_session_id');
-  });
-
-  test('annotateLastEntry export is removed (use session-log annotate event instead)', async () => {
-    const mod = await import('../audit.mjs');
-    assert.equal(mod.annotateLastEntry, undefined, 'annotateLastEntry must be removed — append annotate to session-log instead');
-  });
-
-  test('appendLog protects canonical v2 fields from caller shadowing (envelope/extra)', () => {
-    // Caller tries to overwrite canonical metadata via envelope or extra — must NOT win.
-    const malicious = {
-      turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: [], conclusion: 'proceed',
-      schema_version: 999,                // shadowing attempt via envelope
-      ts: 'fake-ts',
-      buddy_session_id: 'wrong-sid',
-      verification_task_id: 'wrong-vtask',
-      workspace: '/wrong',
+  test('appendLog drops envelope keys that are not in ENVELOPE_KEYS whitelist', () => {
+    const envelope = {
+      turn: 0, level: 'V2', rule: 'r', triggered: true, route: 'local', evidence: [], conclusion: 'proceed',
+      // Stale aliases / unknown fields the caller might leak:
+      session_id: 'wrong', timestamp: 'fake-ts', schema_version: 999, buddy_session_id: 'leaked',
+      workspace: '/wrong', verification_task_id: 'vtask-leaked', message: 'leaked',
+      anything_random: 'x',
     };
-    appendLog(logFile, malicious, 'buddy-correct', '/correct', undefined, {
-      schema_version: 888,                // shadowing attempt via extra
-      ts: 'also-fake',
-      buddy_session_id: 'wrong-extra',
-      verification_task_id: 'vtask-real',
+    appendLog(logFile, {
+      envelope,
+      buddySessionId: 'buddy-correct',
+      workspace: '/correct',
+      action: 'local',
+      verificationTaskId: 'vtask-real',
     });
     const entry = JSON.parse(fs.readFileSync(logFile, 'utf8').trim());
-    assert.equal(entry.schema_version, AUDIT_SCHEMA_VERSION, 'canonical schema_version must not be overridden');
-    assert.match(entry.ts, /^\d{4}-\d{2}-\d{2}T/, 'canonical ts must not be overridden');
-    assert.equal(entry.buddy_session_id, 'buddy-correct', 'canonical buddy_session_id must not be overridden');
-    assert.equal(entry.workspace, '/correct', 'canonical workspace must not be overridden');
-    // verification_task_id IS allowed via extra (it's a legitimate parameter)
-    assert.equal(entry.verification_task_id, 'vtask-real', 'verification_task_id from extra is the canonical input');
+    // Canonical wins:
+    assert.equal(entry.schema_version, AUDIT_SCHEMA_VERSION);
+    assert.equal(entry.buddy_session_id, 'buddy-correct');
+    assert.equal(entry.verification_task_id, 'vtask-real');
+    assert.equal(entry.workspace, '/correct');
+    // Stale aliases stripped (NOT just shadowed):
+    assert.equal(entry.session_id, undefined);
+    assert.equal(entry.timestamp, undefined);
+    assert.equal(entry.anything_random, undefined);
+    assert.equal(entry.message, undefined);
+  });
+
+  test('appendLog rejects missing required options', () => {
+    const env = { turn: 0, level: 'V2', rule: 'r', triggered: true, route: 'local', evidence: [], conclusion: 'proceed' };
+    assert.throws(() => appendLog(logFile, { envelope: env, workspace: '/tmp', action: 'local', verificationTaskId: 'v1' }),
+      /buddySessionId required/);
+    assert.throws(() => appendLog(logFile, { envelope: env, buddySessionId: 's', action: 'local', verificationTaskId: 'v1' }),
+      /workspace required/);
+    assert.throws(() => appendLog(logFile, { envelope: env, buddySessionId: 's', workspace: '/tmp', action: 'local' }),
+      /verificationTaskId required/);
+    assert.throws(() => appendLog(logFile, { envelope: env, buddySessionId: 's', workspace: '/tmp', action: 'wrong', verificationTaskId: 'v' }),
+      /action must be one of/);
+  });
+
+  test('getCallCount counts codex calls; legacy session_id fallback', () => {
+    const env = { turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: [], conclusion: 'proceed' };
+    appendLog(logFile, { envelope: env, buddySessionId: 'buddy-001', workspace: '/tmp', action: 'probe', verificationTaskId: 'v1' });
+    appendLog(logFile, { envelope: { ...env, route: 'local' }, buddySessionId: 'buddy-001', workspace: '/tmp', action: 'local', verificationTaskId: 'v2' });
+    appendLog(logFile, { envelope: env, buddySessionId: 'buddy-001', workspace: '/tmp', action: 'probe', verificationTaskId: 'v3' });
+    fs.appendFileSync(logFile, JSON.stringify({ turn: 4, route: 'codex', session_id: 'buddy-001', timestamp: '2026-01-01T00:00:00Z' }) + '\n');
+    assert.equal(getCallCount(logFile, 'buddy-001'), 3);
+  });
+
+  test('annotateLastEntry export removed', async () => {
+    const mod = await import('../audit.mjs');
+    assert.equal(mod.annotateLastEntry, undefined);
   });
 });

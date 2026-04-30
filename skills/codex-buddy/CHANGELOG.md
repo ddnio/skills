@@ -4,6 +4,46 @@
 
 ---
 
+## Stage 5d — 2026-04-30 Strict v2 audit-row contract + shared annotation policy
+
+### Content
+After Codex re-reviewed stage5c (verdict=caution, 6 findings) and gave a prescriptive plan with verdict=proceed, applied the full prescription:
+
+- **F3 — Schema split (CloudEvents/OTel-style envelope vs persisted record)**:
+  - `schemas/envelope.schema.json` is now the **bare** decision envelope (turn/level/rule/triggered/route/evidence/conclusion + optional confidence/unverified). No persistence metadata.
+  - New `schemas/audit-row-v2.schema.json` — **strict** persisted v2 row contract. v2 metadata (`schema_version`/`ts`/`buddy_session_id`/`verification_task_id`/`workspace`/`action`) is REQUIRED. `verification_task_id` is a non-nullable string (legacy rows are not v2 rows).
+- **F2 — `appendLog` strict options-object signature**:
+  - Old: `appendLog(logFile, envelope, sid, ws, latencyMs, extra)` with open-ended spreads.
+  - New: `appendLog(logFile, { envelope, buddySessionId, workspace, action, verificationTaskId, latencyMs?, message? })`.
+  - Envelope filtered to `ENVELOPE_KEYS` whitelist; aliases (`session_id`/`timestamp`) and arbitrary unknown keys silently dropped (no longer just shadowed).
+  - Throws `TypeError` on missing required options or unknown action.
+- **F4 — Hand-rolled validator upgraded (no ajv dep)**:
+  - `audit-row-schema.test.mjs` exports `assertValidAuditRowV2()` — checks required, type, enum, const, **minimum, format:date-time, minLength, array item types, additionalProperties:false**.
+  - +5 negative tests: rejects rows with negative turn / malformed ts / non-string evidence items / bogus action enum / wrong schema_version const / null verification_task_id.
+  - Decision: stay all-Node-stdlib (codex-buddy is single-skill, no package.json; ajv adds packaging surface for marginal gain).
+- **F6 — Default annotate now targets `probe.codex_output` only**:
+  - Followups can still be annotated explicitly via `--verification-task-id`.
+  - Rationale: metrics computes annotation rates over PROBES; defaulting to followup silently dropped the metric. New regression test in `metrics.test.mjs` proves probe→followup→annotate(no-id)→metrics counts the probe.
+- **F5 — Shared annotation module `lib/annotations.mjs`**:
+  - Single source of truth: `ANNOTATION_FIELDS`, `ANNOTATION_FLAG_MAP`, `parseAnnotationFlags`, `mergeAnnotation`.
+  - `buddy-runtime.mjs:actionAnnotate` and `metrics.mjs:buildAnnotationLookup` both import from here. No more drift if a new field is added.
+- **verify-repo.sh** updated to check both schema files and the new annotations module.
+
+### Tests
+86 → 94 (+8): audit options-signature tests + drop-unknown-keys, F6 regression, 5 schema negative tests, plus existing accumulation tests still green.
+
+### Codex Interaction
+- Probe 1 (review): caution, 6 findings (F1 confirmed prior fixes; F2/F3/F4/F5/F6 new concerns).
+- Probe 2 (prescription): proceed verdict, ordered fix plan citing CloudEvents and OpenTelemetry conventions.
+- Followup attempt failed (probe was ephemeral); re-issued as fresh probe within decision budget.
+- Codex's strongest contribution: argued F3 should be FIRST because contract definition (what is "valid") makes F2/F4 tractable. Claude originally ranked F5/F2 first by cost; Codex's framing won.
+
+### Skipped (intentional)
+- ajv/zod dependency: not worth packaging cost for single-skill marketplace tool.
+- File rename `logs.jsonl` → `decisions.jsonl`: still risk > benefit on existing 421KB legacy data.
+
+---
+
 ## Stage 5c — 2026-04-30 Stage 5b post-review fixes
 
 ### Content

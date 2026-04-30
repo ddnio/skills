@@ -38,6 +38,7 @@ import { checkTopicDrift } from './lib/topic-drift.mjs';
 import { collectEvidence } from './lib/local-evidence.mjs';
 import { createEnvelope } from './lib/envelope.mjs';
 import { appendLog, getCallCount } from './lib/audit.mjs';
+import { parseAnnotationFlags, ANNOTATION_FLAG_MAP } from './lib/annotations.mjs';
 import { getStats } from './lib/metrics.mjs';
 import { appendSessionEvent, readSessionEvents, newVerificationTaskId } from './lib/session-log.mjs';
 import { getBuddyHome } from './lib/paths.mjs';
@@ -179,9 +180,13 @@ async function actionLocal(args) {
 
   const latencyMs = Date.now() - startTime;
   const localTaskId = newVerificationTaskId();
-  appendLog(logFilePath(), envelope, buddySessionId, args['project-dir'], latencyMs, {
+  appendLog(logFilePath(), {
+    envelope,
+    buddySessionId,
+    workspace: args['project-dir'],
     action: 'local',
-    verification_task_id: localTaskId,
+    verificationTaskId: localTaskId,
+    latencyMs,
   });
 
   output({
@@ -369,9 +374,13 @@ async function actionProbe(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(logFilePath(), envelope, buddySessionId, args['project-dir'], latencyMs, {
+    appendLog(logFilePath(), {
+      envelope,
+      buddySessionId,
+      workspace: args['project-dir'],
       action: 'probe',
-      verification_task_id: verificationTaskId,
+      verificationTaskId,
+      latencyMs,
     });
 
     appendSessionEvent(buddySessionId, verificationTaskId, 'probe.codex_output', {
@@ -499,9 +508,13 @@ async function actionFollowup(args) {
     });
 
     const latencyMs = Date.now() - startTime;
-    appendLog(logFilePath(), envelope, buddySessionId, args['project-dir'], latencyMs, {
+    appendLog(logFilePath(), {
+      envelope,
+      buddySessionId,
+      workspace: args['project-dir'],
       action: 'followup',
-      verification_task_id: verificationTaskId,
+      verificationTaskId,
+      latencyMs,
     });
 
     appendSessionEvent(buddySessionId, verificationTaskId, 'followup.codex_output', {
@@ -534,30 +547,26 @@ async function actionFollowup(args) {
   }
 }
 
-// Annotate the most recent log entry for a session with probe_found_new / user_adopted.
+// Annotate the most recent probe for a session with probe_found_new / user_adopted.
 // Claude calls this after synthesizing Codex output to record post-hoc metrics.
 async function actionAnnotate(args) {
   const buddySessionId = getOrCreateBuddySessionId(args['session-id']);
-  const fields = {};
-  if (args['probe-found-new'] !== undefined) {
-    fields.probe_found_new = args['probe-found-new'] === 'true';
-  }
-  if (args['user-adopted'] !== undefined) {
-    fields.user_adopted = args['user-adopted'] === 'true';
-  }
+  const { fields } = parseAnnotationFlags(args);
   if (!Object.keys(fields).length) {
-    output({ status: 'error', message: 'No fields to annotate. Use --probe-found-new and/or --user-adopted.' });
+    output({ status: 'error',
+             message: `No fields to annotate. Use ${Object.keys(ANNOTATION_FLAG_MAP).map(f => '--' + f).join(' and/or ')}.` });
     return;
   }
-  // Annotation is recorded in the session-log event stream (append-only).
-  // We default verification_task_id to the latest probe/followup output for this
-  // buddy session so the annotate event is properly linked to the probe it annotates.
+  // Default task id: latest probe.codex_output ONLY (not followup.codex_output).
+  // metrics computes annotation rates over probes, so attaching annotation to
+  // a followup task would silently drop the metric. Caller can override with
+  // --verification-task-id to annotate a followup explicitly.
   let taskId = args['verification-task-id'];
   if (!taskId) {
     const events = readSessionEvents(buddySessionId);
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i];
-      if (e.event === 'probe.codex_output' || e.event === 'followup.codex_output') {
+      if (e.event === 'probe.codex_output') {
         taskId = e.verification_task_id;
         break;
       }

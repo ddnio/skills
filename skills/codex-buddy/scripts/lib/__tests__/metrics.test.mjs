@@ -8,6 +8,10 @@ import { appendLog } from '../audit.mjs';
 import { appendSessionEvent } from '../session-log.mjs';
 import { getStats } from '../metrics.mjs';
 
+function probeEnvelope() {
+  return { turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: [], conclusion: 'proceed' };
+}
+
 describe('metrics', () => {
   let tmpHome;
   let oldHome;
@@ -16,63 +20,73 @@ describe('metrics', () => {
   beforeEach(() => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-metrics-'));
     oldHome = process.env.BUDDY_HOME;
-    // session-log writes via getBuddyHome(); BUDDY_HOME env var is the override hook
     process.env.BUDDY_HOME = path.join(tmpHome, '.buddy');
     fs.mkdirSync(process.env.BUDDY_HOME, { recursive: true });
     logFile = path.join(process.env.BUDDY_HOME, 'logs.jsonl');
   });
-
   afterEach(() => {
     if (oldHome === undefined) delete process.env.BUDDY_HOME;
     else process.env.BUDDY_HOME = oldHome;
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  // C1 regression test: multiple partial annotate calls must accumulate, not overwrite.
-  test('annotate field accumulation across multiple partial annotate events (C1 regression)', () => {
+  test('annotate field accumulation across multiple partial annotate events (C1)', () => {
     const sid = 'buddy-c1';
     const vtask = 'vtask-c1-001';
-
-    // One probe in decisions stream
-    appendLog(logFile, { turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: [], conclusion: 'proceed' },
-              sid, '/tmp', 1000, { action: 'probe', verification_task_id: vtask });
-
-    // First annotate: only probe_found_new
+    appendLog(logFile, { envelope: probeEnvelope(), buddySessionId: sid, workspace: '/tmp', action: 'probe', verificationTaskId: vtask, latencyMs: 1000 });
     appendSessionEvent(sid, vtask, 'annotate', { probe_found_new: true });
-    // Second annotate: only user_adopted (separate call, e.g. Claude annotates after user feedback)
     appendSessionEvent(sid, vtask, 'annotate', { user_adopted: true });
-
     const stats = getStats(logFile, sid);
-    assert.equal(stats.probe_found_new_rate, 100,
-      'probe_found_new from earlier annotate event must NOT be lost when later partial annotate writes user_adopted');
-    assert.equal(stats.user_adopted_rate, 100,
-      'user_adopted from later annotate event must be picked up');
+    assert.equal(stats.probe_found_new_rate, 100);
+    assert.equal(stats.user_adopted_rate, 100);
   });
 
-  // Last-write-wins applies per-field (re-annotation should overwrite same field, not unrelated fields).
   test('per-field last-wins on re-annotation', () => {
     const sid = 'buddy-c1b';
     const vtask = 'vtask-c1b-001';
-
-    appendLog(logFile, { turn: 1, level: 'V2', rule: 'r', triggered: true, route: 'codex', evidence: [], conclusion: 'proceed' },
-              sid, '/tmp', undefined, { action: 'probe', verification_task_id: vtask });
-
+    appendLog(logFile, { envelope: probeEnvelope(), buddySessionId: sid, workspace: '/tmp', action: 'probe', verificationTaskId: vtask });
     appendSessionEvent(sid, vtask, 'annotate', { probe_found_new: true });
-    appendSessionEvent(sid, vtask, 'annotate', { probe_found_new: false });   // correction
+    appendSessionEvent(sid, vtask, 'annotate', { probe_found_new: false });
     appendSessionEvent(sid, vtask, 'annotate', { user_adopted: true });
-
     const stats = getStats(logFile, sid);
-    assert.equal(stats.probe_found_new_rate, 0, 'corrected probe_found_new=false must win for that field');
-    assert.equal(stats.user_adopted_rate, 100, 'user_adopted from a separate annotate event must still be visible');
+    assert.equal(stats.probe_found_new_rate, 0);
+    assert.equal(stats.user_adopted_rate, 100);
   });
 
   test('legacy entries with in-place annotation still counted', () => {
-    // Legacy: pre-v2 entry with mutated probe_found_new field on the log row itself.
     const legacy = { turn: 1, route: 'codex', session_id: 'buddy-legacy', timestamp: '2026-01-01T00:00:00Z',
                      probe_found_new: true, action: 'probe' };
     fs.appendFileSync(logFile, JSON.stringify(legacy) + '\n');
-
     const stats = getStats(logFile, 'buddy-legacy');
-    assert.equal(stats.probe_found_new_rate, 100, 'legacy in-place annotation must still be honored');
+    assert.equal(stats.probe_found_new_rate, 100);
+  });
+
+  // F6 regression test: annotate without explicit task id must attach to latest probe,
+  // not a more-recent followup; otherwise metrics (which only iterates probes) drops it.
+  test('default annotate prefers probe over followup (F6)', async () => {
+    const sid = 'buddy-f6';
+    const probeTask = 'vtask-probe-001';
+    const fupTask   = 'vtask-fup-001';
+    // Probe row + probe.codex_output in session-log
+    appendLog(logFile, { envelope: probeEnvelope(), buddySessionId: sid, workspace: '/tmp', action: 'probe', verificationTaskId: probeTask, latencyMs: 100 });
+    appendSessionEvent(sid, probeTask, 'probe.codex_output', { runtime: 'broker' });
+    // Followup row + followup.codex_output (chronologically AFTER probe)
+    appendLog(logFile, { envelope: probeEnvelope(), buddySessionId: sid, workspace: '/tmp', action: 'followup', verificationTaskId: fupTask, latencyMs: 100 });
+    appendSessionEvent(sid, fupTask, 'followup.codex_output', { runtime: 'broker' });
+
+    // Simulate `actionAnnotate` default lookup: scan from end for probe.codex_output ONLY.
+    // We test this by directly invoking the same logic against the session events.
+    const { readSessionEvents } = await import('../session-log.mjs');
+    const events = readSessionEvents(sid);
+    let resolved = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].event === 'probe.codex_output') { resolved = events[i].verification_task_id; break; }
+    }
+    assert.equal(resolved, probeTask, 'default must resolve to probe task, even when followup is more recent');
+
+    // Now actually annotate that probe and verify metrics counts it.
+    appendSessionEvent(sid, probeTask, 'annotate', { probe_found_new: true });
+    const stats = getStats(logFile, sid);
+    assert.equal(stats.probe_found_new_rate, 100);
   });
 });

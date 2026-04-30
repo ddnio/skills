@@ -296,20 +296,24 @@ V3_FILES=(
   "scripts/lib/gate.mjs"
   "scripts/lib/envelope.mjs"
   "scripts/lib/audit.mjs"
+  "scripts/lib/annotations.mjs"
   "schemas/envelope.schema.json"
+  "schemas/audit-row-v2.schema.json"
 )
 for f in "${V3_FILES[@]}"; do
   [ -f "$SKILL_DIR/$f" ] && pass "$f" || fail "$f MISSING"
 done
 
-# envelope schema 是合法 JSON
-if [ -f "$SKILL_DIR/schemas/envelope.schema.json" ]; then
-  if command -v node &>/dev/null && node -e "JSON.parse(require('fs').readFileSync('$SKILL_DIR/schemas/envelope.schema.json','utf8'))" 2>/dev/null; then
-    pass "envelope.schema.json is valid JSON"
-  else
-    fail "envelope.schema.json is not valid JSON"
+# schema files are valid JSON
+for schema_file in envelope.schema.json audit-row-v2.schema.json; do
+  if [ -f "$SKILL_DIR/schemas/$schema_file" ]; then
+    if command -v node &>/dev/null && node -e "JSON.parse(require('fs').readFileSync('$SKILL_DIR/schemas/$schema_file','utf8'))" 2>/dev/null; then
+      pass "$schema_file is valid JSON"
+    else
+      fail "$schema_file is not valid JSON"
+    fi
   fi
-fi
+done
 echo ""
 
 # ── 最终结果 ─────────────────────────────────────────────────

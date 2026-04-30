@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getBuddyHome } from './paths.mjs';
 import { readSessionEvents } from './session-log.mjs';
+import { mergeAnnotation } from './annotations.mjs';
 
 function defaultLog() { return path.join(getBuddyHome(), 'logs.jsonl'); }
 
@@ -19,15 +20,11 @@ function resolveAction(e) {
 
 // For schema v2 entries, annotation lives in the session-log as one or more
 // 'annotate' events keyed by (buddy_session_id, verification_task_id).
-//
-// Multiple partial annotate events for the same task MUST accumulate (e.g.
-// `annotate --probe-found-new true` then `annotate --user-adopted true`).
-// We merge per field, so later events override earlier values of the SAME
-// field but never erase fields they didn't touch.
+// Multiple partial annotate events MUST accumulate per field — see
+// lib/annotations.mjs:mergeAnnotation (single source of truth for the policy).
 function buildAnnotationLookup(entries) {
   const sessionIds = new Set(entries.map(entrySessionId).filter(Boolean));
   const byTaskId = new Map();
-  const ANNOTATE_FIELDS = ['probe_found_new', 'user_adopted'];
   for (const sid of sessionIds) {
     let events = [];
     try { events = readSessionEvents(sid); } catch { continue; }
@@ -35,11 +32,7 @@ function buildAnnotationLookup(entries) {
       if (e.event !== 'annotate') continue;
       if (!e.verification_task_id) continue;
       const key = `${sid}::${e.verification_task_id}`;
-      const merged = byTaskId.get(key) || {};
-      for (const f of ANNOTATE_FIELDS) {
-        if (e[f] !== undefined) merged[f] = e[f];
-      }
-      byTaskId.set(key, merged);
+      byTaskId.set(key, mergeAnnotation(byTaskId.get(key), e));
     }
   }
   return byTaskId;
