@@ -59,6 +59,15 @@ NONE
   done_when: "codex-adapter.mjs uses -a never before exec, --ephemeral for probes, trimPrompt caps at 12000 chars; smoke test passes"
   status: done
 
+- id: W-018
+  type: improve
+  title: 可回放评估闭环
+  source: CHANGELOG: 最大系统性缺陷不是审计痕迹缺失，而是缺少可回放的评估机制来检验触发是否正确、验证是否真的提升了决策质量
+  impact: high
+  reversibility: safe
+  done_when: "evals include replayable trigger/verification-quality cases; command output reports pass/fail counts for those cases"
+  status: open
+
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
 NONE
@@ -78,11 +87,11 @@ NONE
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-All v3.1.0 work_queue items completed (W-014/015/016/017 all done)
+W-018 remains queued as the next evaluation-system improvement; current PR does not implement it.
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->
-VALIDATE
+ITERATE
 
 ## human_gate
 <!-- NONE | REQUIRED:<reason> -->
