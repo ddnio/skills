@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import net from 'node:net';
+import { checkUnixSocketSupport } from '../../__tests__/helpers.mjs';
 import {
   getWorktreeHash,
   getBrokerPaths,
@@ -30,7 +30,7 @@ before(async () => {
   TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-broker-test-'));
   process.env.BUDDY_HOME = TEST_HOME;
   fs.mkdirSync(FIXTURE_PROJECT, { recursive: true });
-  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport();
+  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport('buddy-broker-socket-check');
 });
 
 after(() => {
@@ -227,21 +227,3 @@ describe('buddy-broker — W8 turn/start streaming forwarding', () => {
     }
   });
 });
-
-function checkUnixSocketSupport() {
-  const sockPath = path.join(os.tmpdir(), `buddy-socket-check-${process.pid}-${Date.now()}.sock`);
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    let done = false;
-    const finish = (ok) => {
-      if (done) return;
-      done = true;
-      try { server.close(); } catch {}
-      try { fs.unlinkSync(sockPath); } catch {}
-      resolve(ok);
-    };
-    server.once('listening', () => finish(true));
-    server.once('error', () => finish(false));
-    server.listen(sockPath);
-  });
-}

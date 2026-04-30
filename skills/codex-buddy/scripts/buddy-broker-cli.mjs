@@ -86,7 +86,7 @@ async function main() {
         });
       } catch (e) {
         emit({
-          status: 'ok',
+          status: 'degraded',
           action: 'status',
           alive: true,
           pid_file_present: fs.existsSync(paths.pidPath),

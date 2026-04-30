@@ -4,8 +4,8 @@ import { execSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { checkUnixSocketSupport } from './helpers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = path.resolve(__dirname, '..', 'buddy-runtime.mjs');
@@ -20,7 +20,7 @@ before(async () => {
   TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-runtime-home-'));
   process.env.BUDDY_HOME = path.join(TEST_HOME, '.buddy');
   process.env.HOME = TEST_HOME;
-  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport();
+  CAN_USE_UNIX_SOCKETS = await checkUnixSocketSupport('buddy-runtime-socket-check');
 });
 
 after(() => {
@@ -458,24 +458,6 @@ describe('CLI: stdin evidence + replay + log-synthesis', () => {
     }
   });
 });
-
-function checkUnixSocketSupport() {
-  const sockPath = path.join(os.tmpdir(), `buddy-runtime-socket-check-${process.pid}-${Date.now()}.sock`);
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    let done = false;
-    const finish = (ok) => {
-      if (done) return;
-      done = true;
-      try { server.close(); } catch {}
-      try { fs.unlinkSync(sockPath); } catch {}
-      resolve(ok);
-    };
-    server.once('listening', () => finish(true));
-    server.once('error', () => finish(false));
-    server.listen(sockPath);
-  });
-}
 
 describe('session policy helpers', () => {
   test('saveConversationSession + loadConversationSession round-trip', async () => {

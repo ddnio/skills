@@ -55,5 +55,5 @@ export function getProvider(value) {
 
 export function shouldFallbackFromBrokerError(error) {
   const message = String(error?.message || error || '');
-  return /listen EPERM|operation not permitted|broker did not become reachable|ECONNREFUSED|EADDRINUSE/i.test(message);
+  return /\b(?:listen|bind)\s+(?:EPERM|EACCES)\b|broker did not become reachable|ECONNREFUSED|EADDRINUSE/i.test(message);
 }

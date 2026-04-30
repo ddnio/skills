@@ -31,7 +31,9 @@ describe('providers', () => {
 
   test('classifies broker startup failures that can fall back to exec', () => {
     assert.equal(shouldFallbackFromBrokerError(new Error('listen EPERM: operation not permitted /tmp/x.sock')), true);
+    assert.equal(shouldFallbackFromBrokerError(new Error('bind EACCES: permission denied /tmp/x.sock')), true);
     assert.equal(shouldFallbackFromBrokerError(new Error('spawnBroker: broker did not become reachable within 5000ms')), true);
+    assert.equal(shouldFallbackFromBrokerError(new Error('turn/start failed: operation not permitted reading fixture')), false);
     assert.equal(shouldFallbackFromBrokerError(new Error('turn failed: model refused')), false);
   });
 });
