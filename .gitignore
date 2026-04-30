@@ -1,1 +1,4 @@
-.worktrees/
+.omc/
+node_modules/
+*.log
+docs/SESSION_HANDOFF.md

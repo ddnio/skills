@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://buddy.nanafox.com/schemas/envelope.schema.json",
-  "title": "Buddy Decision Envelope",
-  "description": "JSON Schema for buddy v3 verification decision records (includes audit metadata)",
+  "title": "Buddy Decision Envelope (bare)",
+  "description": "Bare verification decision envelope — the in-memory shape produced by createEnvelope(). Persisted audit rows extend this with v2 metadata; see audit-row-v2.schema.json.",
   "type": "object",
   "required": [
     "turn",
@@ -14,70 +14,15 @@
     "conclusion"
   ],
   "properties": {
-    "turn": {
-      "type": "integer",
-      "description": "Turn number in the verification sequence",
-      "minimum": 0
-    },
-    "level": {
-      "type": "string",
-      "enum": ["V0", "V1", "V2", "V3"],
-      "description": "Verification level"
-    },
-    "rule": {
-      "type": "string",
-      "description": "Name or identifier of the verification rule applied"
-    },
-    "triggered": {
-      "type": "boolean",
-      "description": "Whether the rule was triggered in this turn"
-    },
-    "route": {
-      "type": "string",
-      "enum": ["local", "codex", "both"],
-      "description": "Verification routing decision"
-    },
-    "evidence": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Array of evidence items supporting the decision"
-    },
-    "conclusion": {
-      "type": "string",
-      "enum": ["proceed", "stop", "needs-evidence", "needs-review"],
-      "description": "Decision outcome"
-    },
-    "confidence": {
-      "type": "string",
-      "enum": ["high", "medium", "low"],
-      "description": "Confidence level in the decision (optional)"
-    },
-    "unverified": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Array of items that remain unverified (optional)"
-    },
-    "session_id": {
-      "type": "string",
-      "description": "Buddy session ID for budget tracking (added by audit.mjs)"
-    },
-    "workspace": {
-      "type": "string",
-      "description": "Project working directory (added by audit.mjs)"
-    },
-    "timestamp": {
-      "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp (added by audit.mjs)"
-    },
-    "latency_ms": {
-      "type": "number",
-      "description": "Verification latency in milliseconds (added by audit.mjs)"
-    }
+    "turn":       { "type": "integer", "minimum": 0, "description": "Turn number in the verification sequence" },
+    "level":      { "type": "string", "enum": ["V0", "V1", "V2", "V3"] },
+    "rule":       { "type": "string", "minLength": 1 },
+    "triggered":  { "type": "boolean" },
+    "route":      { "type": "string", "enum": ["local", "codex", "both", "none"] },
+    "evidence":   { "type": "array", "items": { "type": "string" } },
+    "conclusion": { "type": "string", "enum": ["proceed", "stop", "needs-evidence", "needs-review", "skipped"] },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "unverified": { "type": "array", "items": { "type": "string" } }
   },
   "additionalProperties": false
 }

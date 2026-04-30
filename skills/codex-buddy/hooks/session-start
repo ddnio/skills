@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # SessionStart hook for codex-buddy plugin
+#
+# Stage5e: per-worktree buddy_session_id isolation + handoff injection.
+# - cwd from hook stdin keys ~/.buddy/state/by-cwd/<sha256(cwd)[:8]>.json
+#   (concurrent Claude sessions in different worktrees no longer collide)
+# - <cwd>/docs/SESSION_HANDOFF.md is read and prepended to additionalContext
+#   if it exists, so the next Claude session resumes with explicit context.
 
 set -euo pipefail
 
@@ -9,14 +15,89 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Read SKILL.md content
 skill_content=$(cat "${PLUGIN_ROOT}/SKILL.md" 2>&1 || echo "Error reading codex-buddy SKILL.md")
 
-# Run preflight check
-preflight_result=""
-if [ -x "$(command -v node)" ]; then
-  preflight_result=$(node "${PLUGIN_ROOT}/scripts/buddy-runtime.mjs" --action preflight 2>/dev/null || echo '{"status":"error","message":"preflight failed"}')
+# Read hook stdin (Claude Code passes JSON envelope: source/session_id/cwd/transcript_path)
+hook_input=""
+if [ ! -t 0 ]; then
+  hook_input=$(cat 2>/dev/null || true)
+fi
+# C3 fix: parse hook JSON via node (same pattern as session-end), not sed.
+# sed is fragile for cwd paths with escaped chars or pretty-printed JSON.
+# Initialize with defaults first so set -u doesn't fire when stdin is empty.
+trigger=""
+hook_cwd=""
+if [ -n "$hook_input" ] && command -v node >/dev/null 2>&1; then
+  trigger="$(printf '%s' "$hook_input" | node -e \
+    "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.stdout.write(JSON.parse(d).source||'')}catch{}})" \
+    2>/dev/null || true)"
+  hook_cwd="$(printf '%s' "$hook_input" | node -e \
+    "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.stdout.write(JSON.parse(d).cwd||'')}catch{}})" \
+    2>/dev/null || true)"
+fi
+[ -z "$trigger" ] && trigger="startup"
+[ -z "$hook_cwd" ] && hook_cwd="${PWD}"
+
+BUDDY_HOME_DIR="${BUDDY_HOME:-${HOME}/.buddy}"
+mkdir -p "$BUDDY_HOME_DIR"
+mkdir -p "$BUDDY_HOME_DIR/state/by-cwd"
+
+# Rotate buddy_session_id (skip on compact to preserve event grouping).
+# Writes BOTH per-cwd state file (primary) and legacy global file (compat).
+if [ "$trigger" != "compact" ] && [ -x "$(command -v node)" ]; then
+  node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const crypto = require('crypto');
+    const home = process.argv[1];
+    const trigger = process.argv[2];
+    const cwd = process.argv[3];
+    const sid = 'buddy-' + crypto.randomUUID().slice(0, 8);
+    const updated = new Date().toISOString();
+    // Official-pattern primary (stage6a): git root + realpathSync + slug-hash16.
+    function resolveWorkspaceRoot(p) {
+      try { return require('child_process').execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: p, encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }).trim(); }
+      catch { return path.resolve(p); }
+    }
+    let canonicalRoot = cwd;
+    try { canonicalRoot = fs.realpathSync(resolveWorkspaceRoot(cwd)); } catch { canonicalRoot = resolveWorkspaceRoot(cwd); }
+    const slug = (path.basename(canonicalRoot) || 'workspace').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace';
+    const hash16 = crypto.createHash('sha256').update(canonicalRoot).digest('hex').slice(0, 16);
+    const pluginData = process.env.CLAUDE_PLUGIN_DATA;
+    const stateRoot = pluginData ? path.join(pluginData, 'state') : path.join(home, 'state');
+    const stateDir = path.join(stateRoot, slug + '-' + hash16);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'buddy-session.json'),
+      JSON.stringify({ buddy_session_id: sid, cwd, updated, trigger }));
+    // Legacy stage5e: by-cwd/<hash8> (back-compat for loadBuddySession stage5e fallback).
+    const cwdHash8 = crypto.createHash('sha256').update(cwd).digest('hex').slice(0, 8);
+    const legacyCwdDir = path.join(home, 'state', 'by-cwd');
+    fs.mkdirSync(legacyCwdDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyCwdDir, cwdHash8 + '.json'),
+      JSON.stringify({ buddy_session_id: sid, cwd, updated, trigger }));
+    // Global legacy pointer (oldest back-compat).
+    fs.writeFileSync(path.join(home, 'buddy-session.json'),
+      JSON.stringify({ buddy_session_id: sid, created_at: updated, trigger }));
+  " "$BUDDY_HOME_DIR" "$trigger" "$hook_cwd" 2>/dev/null || true
 fi
 
-# Initialize audit log directory
-mkdir -p "${HOME}/.buddy"
+# Read SESSION_HANDOFF from BUDDY_HOME (not git-tracked).
+# Primary:  ~/.buddy/handoff-<cwdHash8>.md  (keyed by cwd, lives outside repo)
+# Fallback: legacy docs/SESSION_HANDOFF.md  (migration path; will be phased out)
+# Cap at 8KB to keep additionalContext manageable.
+handoff_content=""
+cwdHash8=$(node -e "const c=require('crypto');process.stdout.write(c.createHash('sha256').update(process.argv[1]).digest('hex').slice(0,8))" "$hook_cwd" 2>/dev/null || true)
+HANDOFF_FILE="${BUDDY_HOME_DIR}/handoff-${cwdHash8}.md"
+if [ ! -f "$HANDOFF_FILE" ]; then
+  HANDOFF_FILE="${hook_cwd}/docs/SESSION_HANDOFF.md"
+fi
+if [ -f "$HANDOFF_FILE" ]; then
+  handoff_content=$(head -c 8192 "$HANDOFF_FILE" 2>/dev/null || true)
+fi
+
+# Run preflight check (after rotation so call_count is for the new session)
+preflight_result=""
+if [ -x "$(command -v node)" ]; then
+  preflight_result=$(node "${PLUGIN_ROOT}/scripts/buddy-runtime.mjs" --action preflight --project-dir "$hook_cwd" 2>/dev/null || echo '{"status":"error","message":"preflight failed"}')
+fi
 
 # Escape string for JSON embedding
 escape_for_json() {
@@ -31,7 +112,15 @@ escape_for_json() {
 
 skill_escaped=$(escape_for_json "$skill_content")
 preflight_escaped=$(escape_for_json "$preflight_result")
-session_context="<EXTREMELY_IMPORTANT>\ncodex-buddy verification policy is now active for this session.\nPreflight: ${preflight_escaped}\n\n**Below is the full content of your 'codex-buddy' skill. Follow it for every turn in this conversation:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+handoff_escaped=$(escape_for_json "$handoff_content")
+
+# Compose context. Handoff goes FIRST (above SKILL.md) so Claude sees "where we left off"
+# before the verification policy.
+if [ -n "$handoff_content" ]; then
+  session_context="<SESSION_HANDOFF>\n${handoff_escaped}\n</SESSION_HANDOFF>\n\n<EXTREMELY_IMPORTANT>\ncodex-buddy verification policy is now active for this session.\nPreflight: ${preflight_escaped}\n\n**Below is the full content of your 'codex-buddy' skill. Follow it for every turn in this conversation:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+else
+  session_context="<EXTREMELY_IMPORTANT>\ncodex-buddy verification policy is now active for this session.\nPreflight: ${preflight_escaped}\n\n**Below is the full content of your 'codex-buddy' skill. Follow it for every turn in this conversation:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+fi
 
 # Output context injection
 if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then

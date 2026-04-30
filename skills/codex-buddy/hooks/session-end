@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# SessionEnd hook for codex-buddy plugin.
+#
+# Graceful broker shutdown sequence (aligned to official codex-plugin-cc pattern):
+#   1. Parse cwd from hook JSON stdin (robust JSON parsing, not sed)
+#   2. Send broker/shutdown via buddy-broker-cli stop (graceful drain)
+#   3. Broker cleans its own socket/pid/log files on exit
+#
+# Does NOT touch persistent learning data:
+#   ~/.buddy/logs.jsonl, ~/.buddy/sessions/, ~/.buddy/buddy-session.json
+# These survive across sessions and are never cleaned here.
+#
+# Idempotent: if no broker is running for this cwd, exits 0 silently.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Read hook stdin — Claude Code passes a JSON envelope.
+hook_input=""
+if [ ! -t 0 ]; then
+  hook_input=$(cat 2>/dev/null || true)
+fi
+
+# Parse cwd via node (robust; avoids sed fragility with escaped paths).
+project_dir=""
+if [ -n "$hook_input" ] && command -v node >/dev/null 2>&1; then
+  project_dir="$(printf '%s' "$hook_input" | node -e \
+    "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.stdout.write(JSON.parse(d).cwd||'')}catch{}})" \
+    2>/dev/null || true)"
+fi
+project_dir="${project_dir:-${PWD}}"
+
+if command -v node >/dev/null 2>&1; then
+  node "${PLUGIN_ROOT}/scripts/buddy-broker-cli.mjs" stop \
+    --project-dir "$project_dir" >/dev/null 2>&1 || true
+fi
+
+exit 0

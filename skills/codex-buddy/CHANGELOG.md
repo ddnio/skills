@@ -4,6 +4,191 @@
 
 ---
 
+## Stage 6c — 2026-04-30 broker 健壮性 + W-015 + SESSION_HANDOFF 迁移
+
+### Content
+- **`buddy-broker-process.mjs`**：SIGTERM/SIGINT 加 3s hard-exit timeout；`server.on('error')` 处理 EADDRINUSE；`writePidFile` 移到 `'listening'` 回调防 bind 失败留孤立 pid；Usage 文件名修正
+- **`buddy-broker.mjs`**：`isBrokerAlive` 删除 PID fallback（OS PID 复用导致误判 alive）；删除孤儿函数 `isProcessAlive`
+- **`buddy-broker.test.mjs`**：C2 并发测试改为 `Promise.allSettled`，真正验证 BROKER_BUSY 路径
+- **`hooks/pre-tool` + `hooks.json`**：W-015 PreToolUse advisory hook — 破坏性 Bash 操作（rm -rf/DROP/force-push/reset --hard）自动注入 codex-buddy 验证提醒
+- **`hooks/session-start`**：SESSION_HANDOFF 读路径改为 `~/.buddy/handoff-<cwdHash8>.md`（主），legacy `docs/SESSION_HANDOFF.md` 作迁移 fallback
+- **`docs/SESSION_HANDOFF.md`**：git rm --cached；加入 .gitignore（不再 git 跟踪）
+- **`scripts/verify-repo.sh`**：移除 `docs/SESSION_HANDOFF.md` 必需文件检查
+
+### Codex probe 记录
+- broker hardening + 整体质量 review：2 轮 probe（vtask-mol4pjvv, vtask-mol6xf82）发现 stale PID reuse / C2 test sequential / W-017 STATUS 漂移
+- W-015/SESSION_HANDOFF 决策：verdict=stop，两项均为 v3.1.0 merge 阻断项
+- 合并就绪评估：verdict=stop，6 处问题（verify 失败/CHANGELOG/SKILL.md/STATUS 漂移/decision docs 收口/sync 策略）
+
+---
+
+## Stage 6b — 2026-04-30 官方 broker 实现替换
+
+### Background
+Stage6a 对齐了基座路径，但 broker 进程仍是自研实现，使用 `turn/run`（同步包装），没有流式输出。用户在等待 30-80s 期间看不到任何中间输出。Auth token 在长时间 broker 存活后也会过期（broker 持有旧 token）。
+
+用户方向：**"底层协议直接按照官方的实现，不行就直接拷贝源码"**
+
+### Content
+- **官方文件直接复制**：`app-server.mjs`, `args.mjs`, `broker-endpoint.mjs`（来自 `openai/codex-plugin-cc`）
+- **`buddy-broker-process.mjs`** 替换为官方 `app-server-broker.mjs`，加 lazy connect（W7 pattern）
+- **`app-server.mjs`** 适配：`broker-lifecycle-stub.mjs` + `SIGTERM` 替换 + `BUDDY_BROKER_CODEX_BIN` 测试注入
+- **`runBrokerTurn()`** 新增：实现官方 `turn/start` + streaming notification 协议，实时写 stderr
+- **`buddy-runtime.mjs`**：用 `runBrokerTurn` 替代旧 `brokerSendCommand(turn/run)`
+- 测试：W8 suite 全面更新，112/112 通过
+
+### 用户可见变化
+```
+以前: [buddy] probe started... (黑盒 65s) → 完整结果
+现在: [buddy] probe started...
+      [buddy] Codex > Reading the diff, I see three areas...
+      [buddy] probe completed in 65432ms
+```
+
+### 无 Codex probe
+直接技术决策（复制官方实现），无需独立审查。
+
+---
+
+## Stage 6a — 2026-04-30 基座对齐官方 codex-plugin-cc
+
+### Content
+- **`scripts/lib/paths.mjs`** 重写：`resolveWorkspaceRoot` (git root) + `resolveStateDir` (`CLAUDE_PLUGIN_DATA` + slug-hash16) + `resolveBuddySessionFile`
+- **`codex-adapter.mjs`**：`saveBuddySession` 用新路径，3 层 fallback（stage6a → stage5e legacy → global legacy）
+- **`hooks/session-start`**：内联 CJS 改为官方路径模式（git root + realpathSync + CLAUDE_PLUGIN_DATA + slug-hash16）；sed → Node.js JSON 解析（C3）
+- **`hooks/session-end`**：Node.js JSON 解析 cwd；明确标注不清学习数据
+- **`buddy-broker.mjs`**：`getWorktreeHash` 改用 `resolveWorkspaceRoot` + `realpathSync`（C1 overall review）
+- **`buddy-runtime.mjs`**：`actionReplay` 传 `{cwd}` 到 `loadBuddySession`（C2 overall review）
+- **新增 `scripts/lib/__tests__/paths.test.mjs`**：13 个测试
+- **新增 `docs/decisions/2026-04-30-stage6a-official-base-alignment.md`**
+
+### L3 验证
+`CLAUDE_PLUGIN_DATA/state/ux-stage1-194a7521b31c7040/buddy-session.json` 写入确认 ✅
+
+### Codex probe 记录
+- gap 优先级（vtask-mokxjk5k）：caution — C2 session-start 已存在但实现不完整
+- 分层架构（vtask-mokziebh）：caution — C2 teardown 不能清学习数据，C7 HANDOFF 污染风险
+- code review（vtask-mol0z8oq）：caution — C1 session-start 旧路径、C2 replay 无 cwd
+- overall review（vtask-mol1gd35）：caution — C1 broker hash 不一致、C2 replay race、C3 sed
+
+---
+
+## Stage 5e — 2026-04-30 Per-worktree session isolation + handoff injection
+
+### Background
+Reported bug: two concurrent Claude sessions in different worktrees both saw the same `buddy_session_id` (e.g. `buddy-0eafec6c`) because `~/.buddy/buddy-session.json` is a global mutable pointer overwritten by whichever SessionStart hook fires last. Stats got polluted across worktrees; not a functional break but a real architectural smell.
+
+### Codex framing
+"Global storage is OK; global mutable *current pointer* is not." Reference: Git keeps repo state shared but `HEAD`/`index`/`config.worktree` per-worktree. Terraform: `.terraform/`+`TF_DATA_DIR` per working dir. The minimal fix is to remove the global pointer and key routing by `(session_id, cwd)`.
+
+### Content
+- **Per-worktree state file** (`~/.buddy/state/by-cwd/<sha256(cwd)[:8]>.json`):
+  - `saveBuddySession(sid, { cwd })` writes here as primary; legacy `~/.buddy/buddy-session.json` still updated for back-compat with older code paths.
+  - `loadBuddySession({ cwd })` prefers per-cwd, falls back to legacy global file when missing → no breakage on machines with pre-stage5e data.
+- **`getOrCreateBuddySessionId(argsSessionId, cwd)`** in buddy-runtime: 6 call sites updated to pass `args['project-dir']` so each worktree gets its own sid.
+- **SessionStart hook** rewritten:
+  - Parses `cwd` from hook stdin (Claude Code passes it in JSON envelope).
+  - Computes `cwd_hash` and writes the per-cwd state file (primary) + legacy file (compat).
+  - Reads `<cwd>/docs/SESSION_HANDOFF.md` if present and prepends as `<SESSION_HANDOFF>...</SESSION_HANDOFF>` block in `additionalContext` BEFORE the SKILL.md block. Capped at 8KB.
+- **`docs/SESSION_HANDOFF.md`** is the convention file. Update at end of working session; next Claude session auto-reads it. This file ALSO lives in tracked git history so the worktree itself carries handoff state across machines/branches.
+- **`scripts/lib/__tests__/buddy-session.test.mjs`**: 7 new tests cover save/load round-trip, two-worktree isolation, per-cwd file location, legacy fallback chain.
+- **verify-repo.sh** now checks `docs/SESSION_HANDOFF.md` exists.
+
+### Tests
+94 → 101 (+7 buddy-session tests). All pass. Hook smoke test: handoff injection works; 3 different cwds → 3 different state files (no collision).
+
+### Codex Interaction
+- One probe (caution → 3 high-confidence findings, all confirming Claude's framing).
+- Codex's specific contribution beyond Claude's draft: pointed out that Claude Code's hook stdin already provides `session_id` + `cwd` + `transcript_path`, and `additionalContext` is the documented handoff channel — so we don't need extra plumbing. Codex also explicitly identified the antipattern: not "global storage" but "global mutable current pointer".
+
+### Skipped (intentional)
+- **Deleting legacy `buddy-session.json`**: kept for back-compat read; will retire after a few weeks of v2 usage.
+- **Migrating existing `~/.buddy/sessions/<sid>.jsonl`** data: untouched (Codex F3: existing event streams stay valid; new index sits beside).
+- **Hashing by `(session_id, cwd)` jointly**: cwd alone is sufficient for the reported bug (different worktrees). Adding session_id would isolate concurrent Claude sessions in the SAME cwd — rare and not currently a concern.
+
+---
+
+## Stage 5d — 2026-04-30 Strict v2 audit-row contract + shared annotation policy
+
+### Content
+After Codex re-reviewed stage5c (verdict=caution, 6 findings) and gave a prescriptive plan with verdict=proceed, applied the full prescription:
+
+- **F3 — Schema split (CloudEvents/OTel-style envelope vs persisted record)**:
+  - `schemas/envelope.schema.json` is now the **bare** decision envelope (turn/level/rule/triggered/route/evidence/conclusion + optional confidence/unverified). No persistence metadata.
+  - New `schemas/audit-row-v2.schema.json` — **strict** persisted v2 row contract. v2 metadata (`schema_version`/`ts`/`buddy_session_id`/`verification_task_id`/`workspace`/`action`) is REQUIRED. `verification_task_id` is a non-nullable string (legacy rows are not v2 rows).
+- **F2 — `appendLog` strict options-object signature**:
+  - Old: `appendLog(logFile, envelope, sid, ws, latencyMs, extra)` with open-ended spreads.
+  - New: `appendLog(logFile, { envelope, buddySessionId, workspace, action, verificationTaskId, latencyMs?, message? })`.
+  - Envelope filtered to `ENVELOPE_KEYS` whitelist; aliases (`session_id`/`timestamp`) and arbitrary unknown keys silently dropped (no longer just shadowed).
+  - Throws `TypeError` on missing required options or unknown action.
+- **F4 — Hand-rolled validator upgraded (no ajv dep)**:
+  - `audit-row-schema.test.mjs` exports `assertValidAuditRowV2()` — checks required, type, enum, const, **minimum, format:date-time, minLength, array item types, additionalProperties:false**.
+  - +5 negative tests: rejects rows with negative turn / malformed ts / non-string evidence items / bogus action enum / wrong schema_version const / null verification_task_id.
+  - Decision: stay all-Node-stdlib (codex-buddy is single-skill, no package.json; ajv adds packaging surface for marginal gain).
+- **F6 — Default annotate now targets `probe.codex_output` only**:
+  - Followups can still be annotated explicitly via `--verification-task-id`.
+  - Rationale: metrics computes annotation rates over PROBES; defaulting to followup silently dropped the metric. New regression test in `metrics.test.mjs` proves probe→followup→annotate(no-id)→metrics counts the probe.
+- **F5 — Shared annotation module `lib/annotations.mjs`**:
+  - Single source of truth: `ANNOTATION_FIELDS`, `ANNOTATION_FLAG_MAP`, `parseAnnotationFlags`, `mergeAnnotation`.
+  - `buddy-runtime.mjs:actionAnnotate` and `metrics.mjs:buildAnnotationLookup` both import from here. No more drift if a new field is added.
+- **verify-repo.sh** updated to check both schema files and the new annotations module.
+
+### Tests
+86 → 94 (+8): audit options-signature tests + drop-unknown-keys, F6 regression, 5 schema negative tests, plus existing accumulation tests still green.
+
+### Codex Interaction
+- Probe 1 (review): caution, 6 findings (F1 confirmed prior fixes; F2/F3/F4/F5/F6 new concerns).
+- Probe 2 (prescription): proceed verdict, ordered fix plan citing CloudEvents and OpenTelemetry conventions.
+- Followup attempt failed (probe was ephemeral); re-issued as fresh probe within decision budget.
+- Codex's strongest contribution: argued F3 should be FIRST because contract definition (what is "valid") makes F2/F4 tractable. Claude originally ranked F5/F2 first by cost; Codex's framing won.
+
+### Skipped (intentional)
+- ajv/zod dependency: not worth packaging cost for single-skill marketplace tool.
+- File rename `logs.jsonl` → `decisions.jsonl`: still risk > benefit on existing 421KB legacy data.
+
+---
+
+## Stage 5c — 2026-04-30 Stage 5b post-review fixes
+
+### Content
+Codex review of f28d261 returned verdict=caution; 2 high/medium-confidence findings were validated and fixed:
+
+- **C1 [high] Annotate field accumulation regression**: previous `annotateLastEntry` did `{...old, ...fields}` merge. Stage 5b moved annotation to session-log events but `metrics.buildAnnotationLookup` kept "last event wins" per task — so partial annotates (e.g. `--probe-found-new true` then `--user-adopted true`) would lose the earlier field. Fixed by per-field merge across multiple annotate events for the same task.
+- **C2 [medium] Canonical field shadowing in appendLog**: caller-provided `envelope` and `extra` could overwrite `schema_version` / `ts` / `buddy_session_id` / `workspace`. Canonical fields are now written LAST so they win regardless of caller input.
+- **C3 [medium] envelope.schema.json was stale**: still documented `session_id` / `timestamp` with `additionalProperties: false`; new v2 entries failed external validation. Schema rewritten for v2; new `envelope-schema.test.mjs` validates real `appendLog` output against schema (catches future drift).
+- **C4+C5 [medium] CLI doc caveats**: `references/cli-examples.md` annotate section now documents per-field accumulation, the wrong-task risk in concurrent / multi-worktree scenarios (recommend explicit `--verification-task-id`), and the "legacy logs.jsonl entries cannot be retroactively annotated" limitation.
+
+### Test additions
+- `metrics.test.mjs` (new): C1 regression + per-field last-wins + legacy fallback (3 tests)
+- `audit.test.mjs`: shadowing protection (1 test)
+- `envelope-schema.test.mjs` (new): hand-rolled minimal validator catches schema/writer drift (2 tests)
+- Total: 80 → 86 tests, all passing; verify-repo PASSED; smoke OK
+
+### Codex Interaction
+- Probe (after 1 timeout retry, broker runtime): Codex independently reviewed f28d261 with no Claude-side leading conclusions
+- 5 findings total (1 high + 4 medium); 2 confirmed via code-tracing before fixing; 3 medium addressed via docs/refactor
+- C1 was a real semantic regression that Stage 5b's unit tests didn't catch — Codex's "review of own work" caught what self-review missed
+
+---
+
+## Stage 5b — 2026-04-29 Audit/decision-stream schema v2
+
+### Content
+- **Schema unification (audit.mjs:appendLog)**: rename `session_id` → `buddy_session_id`, `timestamp` → `ts`, add `verification_task_id` and `schema_version: 2`. Now joinable with session-log events on the same keys.
+- **Remove dangerous mutation (audit.mjs:annotateLastEntry)**: the function read the entire log, located the last matching entry, and rewrote the whole file. This broke JSONL append-only semantics, slowed down with file growth, and could lose data under concurrent writes. Annotation now only appends an `annotate` event to `~/.buddy/sessions/<sid>.jsonl` — append-only, idempotent, race-safe.
+- **metrics.mjs cross-stream join**: reads decisions stream, joins to session-log annotate events by `(buddy_session_id, verification_task_id)`. Falls back to legacy in-place mutated fields for pre-v2 entries. Backward compatible with the existing 421KB of historical data.
+- **buddy-runtime.mjs**: passes `verification_task_id` at all 3 `appendLog` call sites (local/probe/followup). Local actions get a synthesized id via `newVerificationTaskId()` for join uniformity.
+- **Tests**: audit.test.mjs +2 tests (schema v2 fields, legacy fallback). 80/80 pass.
+
+### Codex Interaction
+- Probe (after 3 retries due to upstream `chatgpt.com/backend-api` TLS failures): asked Codex to judge dual-stream logging design with no Claude-side leading.
+- Codex `verdict: caution`, 6 high-confidence findings.
+- Critical finding Claude missed: `annotateLastEntry` is the most dangerous code in the data layer (read-modify-rewrite breaks JSONL append-only). This drove the `annotate` rewrite.
+- Codex suggested: prioritize unifying schema + adding cross-stream key (`verification_task_id`) over physically merging files. Done.
+- Skipped per Codex suggestion: file rename `logs.jsonl` → `decisions.jsonl` — risk vs benefit on existing data not justified at this stage.
+
+---
+
 ## v3.0.2 — 2026-04-01 Protocol Communication Performance
 
 ### Content
@@ -59,7 +244,6 @@ Four-round Claude-Codex brainstorm (2026-03-31) established that buddy's differe
 - Brainstorm: 4 rounds of strategic direction exploration
 - Architecture review: Codex identified 6 blocking issues in initial spec, all resolved
 - Final verification: Codex approved spec with "可以开始实现"
-- Full discussion: discussions/2026-03-31-v3-direction-brainstorm.md
 - Spec: docs/superpowers/specs/2026-03-31-buddy-v3-verification-runtime-design.md
 
 ---

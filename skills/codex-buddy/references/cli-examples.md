@@ -2,7 +2,73 @@
 
 > **文档来源：** https://developers.openai.com/codex/cli — Codex CLI 会持续升级，参数和行为以官方文档为准。
 
-> **v3 Note:** 在 v3 中，`buddy-runtime.mjs` 自动生成和执行这些命令。Claude 应通过 `--action probe|local|followup|preflight` 调用 runtime，而非手搓命令。以下示例记录 runtime 内部行为，供理解和调试参考。
+> **v3 Note:** 在 v3 中，`buddy-runtime.mjs` 自动生成和执行这些命令。Claude 应通过 `--action probe|local|followup|preflight|annotate|metrics` 调用 runtime，而非手搓命令。以下示例记录 runtime 内部行为，供理解和调试参考。
+
+## buddy-runtime 调用速查
+
+```bash
+# 默认形式：stdin 传 evidence（推荐，无 /tmp 临时文件）
+cat <<'EOF' | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence-stdin --project-dir "$PWD"
+task_to_judge: ...
+[证据] ...
+[omissions] none
+EOF
+
+# 兼容形式：file 传 evidence（仍可用，等价行为）
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence /tmp/buddy-evidence.txt --project-dir "$PWD"
+
+# Probe 多轮共享上下文（同一 verification task 内连续追问）
+echo "$EVIDENCE" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence-stdin --project-dir "$PWD" --session-policy conversation
+
+# Follow-up（独立动作，与 conversation 互补）
+echo "$EVIDENCE" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action followup \
+  --evidence-stdin --project-dir "$PWD"
+
+# Annotate（每次 probe 综合后必须）
+# 注意：
+# - 多次部分 annotate 会按字段累积（先 --probe-found-new true，后 --user-adopted true 都保留）
+# - 不传 --verification-task-id 时取该 buddy session 最近一次 probe/followup；并发或多 worktree 共享 buddy session 时建议**显式传 task id**
+# - 老 logs.jsonl（pre-v2 / 无 verification_task_id 且无 session-log）无法补 annotate
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action annotate \
+  --probe-found-new true --user-adopted true \
+  --verification-task-id <task-id-from-probe-output>
+
+# Synthesis 也写入会话日志（可选）
+echo "$SYNTHESIS_TEXT" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" \
+  --action log-synthesis --content-stdin --verification-task-id <task-id>
+
+# Replay 一次 buddy 会话的事件流
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action replay --session-id buddy-xxxxxx
+```
+
+**会话事件日志：** runtime 自动把每次交互写入 `~/.buddy/sessions/<buddy-session-id>.jsonl`：
+- `probe.start` / `probe.codex_output` / `probe.synthesis` / `annotate` / `*.error`
+- 每行含 `payload`（默认 redacted）+ `payload_sha256` + `payload_bytes` + `redaction_policy`
+- 大于 256KiB 的 payload 转 `payload_ref`（外部文件，路径 `~/.buddy/sessions/<sid>.payloads/`）
+
+**敏感信息 / Redaction**：
+- 默认 redact 模式覆盖：OpenAI sk-/sk-proj-/sk-svcacct-、Anthropic sk-ant-、GitHub ghp_/gho_/github_pat_、AWS AKIA、Slack xox[abprs]-、Stripe rk_/sk_、JWT、`Authorization: Bearer/Basic/Token`、env-style key=value（api_key/token/password/access_token/refresh_token/client_secret 等）
+- 写入 session log 前才 redact；runtime 传给 codex 的 prompt **不脱敏**（脱敏是审计层，不影响推理质量）
+- `BUDDY_AUDIT_RAW=1`：写 raw payload 到 session log（仅本地调试用，回归后须 unset）
+
+**App-server 模式与 followup**（`BUDDY_USE_APP_SERVER=1` 时）：
+- Phase A 当前实现：app-server probe 拿到的 `threadId`（写入 session log 的 `codex_session_id`）尚未做端到端 e2e 跨协议 resume 验证
+- 期待：app-server 产生的 thread 在 ephemeral=false 时会落盘到 `~/.codex/sessions/.../rollout-*.jsonl`，与 exec 模式的 session 文件同形态，理论上 `codex exec resume <thread-id>` 应可接续
+- **未验证之前推荐做法**：app-server 模式下需要追问，使用 `--session-policy conversation`（probe 自身复用 thread/resume），不要直接换到 followup（避免 PHA→exec 不兼容的边缘情况）
+- Phase B（broker 长持）会把 thread/resume 直接走 app-server 协议，届时跨协议依赖可彻底消除
+
+**Heredoc 边界条件**（用 `cat <<'EOF' | runtime` 传 evidence 时）：
+- 若 evidence 内容里独立一行恰好就是 `EOF`，shell 会提前截断 → 用更长且不可能撞的标记，比如 `BUDDY_EVIDENCE_END`
+- 用 `<<'XXX'`（带引号）禁用 `$var`/backtick 展开，避免 evidence 里的 `$1`、反引号被 shell 解释
+- evidence 含大量 binary/non-UTF8 时考虑 file 形式（`--evidence <path>`）而非 stdin
+
+**Session Policy 选择：**
+- `isolated`（默认）— 每次 probe 独立，无上下文，不被前次结论污染
+- `conversation` — 同一 buddy session 内自动 resume，保留 Codex 上下文，省启动成本
+- 跨 verification task 不要用 conversation；单决策追问用 follow-up，多决策连续探索才用 conversation
 
 ## 常用参数速查
 
