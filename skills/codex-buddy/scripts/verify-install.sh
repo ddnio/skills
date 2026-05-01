@@ -61,7 +61,7 @@ check_tree() {
 
   while IFS= read -r src_file; do
     [ -f "$src_file" ] || continue
-    local rel="${src_file#$SKILL_DIR/}"
+    local rel="${src_file#"$SKILL_DIR"/}"
     if [ -f "$INSTALL_DIR/$rel" ]; then
       if diff -q "$src_file" "$INSTALL_DIR/$rel" > /dev/null 2>&1; then
         pass "$rel 一致"
@@ -75,7 +75,7 @@ check_tree() {
 
   while IFS= read -r installed_file; do
     [ -f "$installed_file" ] || continue
-    local rel="${installed_file#$INSTALL_DIR/}"
+    local rel="${installed_file#"$INSTALL_DIR"/}"
     if [ ! -f "$SKILL_DIR/$rel" ]; then
       fail "$rel 是残留文件（源已删除）"
     fi
