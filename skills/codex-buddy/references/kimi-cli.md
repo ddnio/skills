@@ -74,11 +74,14 @@ result. buddy-runtime uses the final prompt text as synthesis content and record
 | `transport` | `wire` |
 | `runtime` | `wire` |
 | `fallback` | `none` |
+| `degraded` | `false` |
 | `events_count` | provider events emitted by Wire |
+| `verdict` | `GO` / `NO-GO` / `INCONCLUSIVE` after local normalization |
+| `review_status` | `passed` / `blocked` / `inconclusive` |
 
 Legacy path: `kimi --quiet -p` prints the final assistant message to stdout.
 buddy-runtime treats non-empty stdout as the synthesis content and records
-`transport: exec`, `parser_version: kimi-quiet-v1`.
+`transport: exec`, `parser_version: kimi-quiet-v1`, and `degraded: true`.
 
 Legacy compatibility: the old `--print` Python-repr parser remains in
 `scripts/lib/parsers/kimi-repr-v1.mjs` for fixtures and older integrations. That
@@ -102,10 +105,16 @@ To resume this session: kimi -r <uuid>
 **buddy-runtime handling:**
 - Wire final prompt text → used as synthesis content (equivalent to Codex final message)
 - Wire `event` notifications → written to `~/.buddy/sessions/<sid>.jsonl` as `probe.provider_event`
+- Wire timeout / empty final output / permission failure → fail-closed; not a passed review
 - Legacy quiet stdout → used as synthesis content when `BUDDY_KIMI_TRANSPORT=exec` or Wire falls back
 - Legacy `ThinkPart.think` → written to `~/.buddy/sessions/<sid>.jsonl` as `probe.provider_think` event (audit, not shown in synthesis)
 - Legacy `TextPart.text` → used as synthesis content when quiet final output is not available
 - Legacy session ID → extracted from resume line, stored in session log
+
+Kimi verdict normalization is intentionally strict. The first non-empty line must
+start with `GO`, `NO-GO`, or `INCONCLUSIVE`; otherwise the runtime reports
+`verdict: INCONCLUSIVE` and `review_status: inconclusive` while preserving the
+raw text in audit history.
 
 ---
 
@@ -120,7 +129,9 @@ Kimi provider parsing is best-effort:
 | `failed` | No usable text extracted | raw stdout (fallback) |
 
 `fallback: 'none'` when parseStatus is ok/partial; `fallback: 'raw'` when failed.
-Both `parse_status` and `fallback` are written to the audit log row.
+Both `parse_status` and `fallback` are written to the audit log row. Exec
+transport is always treated as degraded because it is retained only for legacy
+compatibility and startup fallback.
 
 ---
 

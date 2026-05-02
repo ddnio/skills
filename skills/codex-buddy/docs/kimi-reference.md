@@ -17,15 +17,19 @@ buddy-runtime.mjs:actionProbe(args)
        │    ├─ app-server path (BUDDY_USE_APP_SERVER=1)
        │    └─ exec path (BUDDY_USE_LEGACY_EXEC=1 / fallback)
        └─ kimi provider
-            └─ kimi-adapter.mjs:execKimi()
-                 ├─ quiet final-message stdout (primary)
-                 └─ parsers/kimi-repr-v1.mjs (legacy compatibility)
+            ├─ kimi-wire-client.mjs:runKimiWireTurn() (default)
+            │    ├─ JSON-RPC initialize / prompt / cancel
+            │    ├─ event notifications → provider_event rows
+            │    └─ client-side action requests rejected in review mode
+            └─ kimi-adapter.mjs:execKimi() (legacy fallback only)
+                 ├─ quiet final-message stdout
+                 └─ parsers/kimi-repr-v1.mjs (compatibility)
 ```
 
 **Why this shape?**
 - `buddy-runtime.mjs` owns shared evidence loading, audit logging, synthesis envelope, and JSON output.
 - `providers.mjs` owns provider capabilities and turn execution.
-- Codex and Kimi both return the same normalized turn shape: final message, transport, provider events, session IDs, parser metadata.
+- Codex and Kimi both return the same normalized turn shape: final message, transport, provider events, session IDs, parser metadata, and degraded status.
 - New CLI agents can be added as providers without branching the runtime.
 
 Session JSONL is audit/replay history. It is not the realtime communication channel between agents.
@@ -39,10 +43,43 @@ scripts/
 ├── buddy-runtime.mjs          — shared actionProbe flow
 ├── lib/
 │   ├── providers.mjs          — Codex/Kimi registry and startTurn contracts
-│   ├── kimi-adapter.mjs       — Kimi exec + preflight
+│   ├── kimi-wire-client.mjs   — Kimi Wire JSON-RPC client
+│   ├── kimi-adapter.mjs       — Kimi legacy exec + preflight
 │   └── parsers/
 │       └── kimi-repr-v1.mjs   — Best-effort legacy Kimi --print output parser
 ```
+
+---
+
+## Wire Contract
+
+Kimi's primary transport is `kimi --wire`. The client sends a best-effort
+`initialize`, then a `prompt` request with the evidence payload. Streaming
+`event` notifications are normalized into `probe.provider_event` rows. If the
+prompt times out, the client sends protocol `cancel` before killing the process.
+
+Kimi review mode does not grant tools or approvals. Wire `request` messages for
+tool calls, approvals, hooks, or questions are answered with safe rejection
+payloads and recorded as `kimi/request_rejected`.
+
+Wire timeout, empty final output, permission errors, and non-zero exits are
+fail-closed. Startup/protocol-unsupported failures may fall back to legacy exec,
+and that result is marked `degraded: true`.
+
+---
+
+## Verdict Contract
+
+Kimi final text is normalized locally into:
+
+| Verdict | `review_status` | Meaning |
+|---------|-----------------|---------|
+| `GO` | `passed` | No blocker was reported in a recognizable verdict line |
+| `NO-GO` | `blocked` | A blocker was reported |
+| `INCONCLUSIVE` | `inconclusive` | Output was unstructured or did not start with a supported verdict |
+
+Unstructured text is preserved in the audit log but does not count as a clean
+pass.
 
 ---
 
@@ -100,7 +137,7 @@ Do NOT add a third model by copying provider-specific branches into `buddy-runti
 
 ## Known Limitations
 
-1. **Kimi output format is not a public contract** — runtime now prefers final-message output, with repr parsing retained only as compatibility fallback.
+1. **Kimi legacy output format is not a public contract** — runtime defaults to Wire; repr parsing is retained only as compatibility fallback.
 2. **Session resume not implemented** — `kimi_session_id` is recorded in session log but `kimi -r <id>` resume is not wired into `actionFollowup`.
 3. **No broker for Kimi** — Each probe spawns a fresh `kimi` process. No persistent thread across probes.
 

@@ -4,6 +4,22 @@
 
 ---
 
+## v3.2.1 — 2026-05-02 Kimi provider fail-closed hardening
+
+### Content
+- **`kimi-wire-client.mjs`**：Wire prompt 返回空 final output 时直接 `kimi-empty-output` fail-closed；timeout 继续发送 `cancel` 且不降级 exec。
+- **`providers.mjs`**：Kimi Wire 成功标记 `degraded:false`；legacy exec / Wire-to-exec fallback 标记 `degraded:true`。
+- **`buddy-runtime.mjs`**：Kimi final text 本地归一为 `GO` / `NO-GO` / `INCONCLUSIVE`，并输出 `review_status: passed|blocked|inconclusive`。
+- **测试**：新增 Wire 空输出、Wire timeout 不 fallback、legacy degraded、Kimi verdict normalization 覆盖。
+- **文档**：同步 Kimi 架构参考、运行参考和 README，消除旧 exec-first 描述。
+
+### 架构决策
+- Kimi 是受控 provider transport，不再把 legacy CLI transcript 当成稳定 review API。
+- 除 Wire 启动/协议不支持外，Kimi 错误不做静默 fallback；空输出、timeout、权限错误、非 0 exit 都不能算通过。
+- 未按约定输出 verdict 的 Kimi 回复只作为审计文本保留，机器判定为 `INCONCLUSIVE`。
+
+---
+
 ## v3.2.0 — 2026-04-30 Kimi CLI 接入（按需路由）
 
 ### Content

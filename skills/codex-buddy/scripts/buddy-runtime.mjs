@@ -53,6 +53,15 @@ function parseCodexOutput(text) {
   return { mode: 'unstructured', data: null };
 }
 
+function normalizeKimiVerdict(text) {
+  const raw = String(text || '').trim();
+  const firstLine = raw.split('\n').map((line) => line.trim()).find(Boolean) || '';
+  const token = firstLine.match(/^(?:verdict\s*:\s*)?(GO|NO-GO|INCONCLUSIVE)\b/i)?.[1]?.toUpperCase();
+  if (token === 'GO') return { verdict: 'GO', reviewStatus: 'passed' };
+  if (token === 'NO-GO') return { verdict: 'NO-GO', reviewStatus: 'blocked' };
+  return { verdict: 'INCONCLUSIVE', reviewStatus: 'inconclusive' };
+}
+
 // Detect whether Codex output contains open questions needing follow-up.
 function hasQuestions(parsed, rawText) {
   if (parsed.mode === 'structured') {
@@ -260,6 +269,7 @@ async function actionProbe(args) {
     const parsed = buddyModel === 'codex'
       ? parseCodexOutput(providerOutput)
       : { mode: turn.parseStatus || 'final-message', data: null };
+    const kimiVerdict = buddyModel === 'kimi' ? normalizeKimiVerdict(providerOutput) : null;
     const followupRecommended = buddyModel === 'codex' && hasQuestions(parsed, providerOutput);
 
     for (const event of turn.events || []) {
@@ -312,8 +322,10 @@ async function actionProbe(args) {
       ephemeral: turn.ephemeral,
       broker_fallback: turn.brokerFallback || false,
       broker_fallback_reason: turn.brokerFallbackReason || null,
+      degraded: turn.degraded || false,
       parse_mode: parsed.mode,
-      verdict: parsed.data?.verdict || null,
+      verdict: kimiVerdict?.verdict || parsed.data?.verdict || null,
+      review_status: kimiVerdict?.reviewStatus || null,
       latency_ms: latencyMs,
       first_byte_ms: turn.firstByteMs ?? null,
       followup_recommended: followupRecommended,
@@ -325,7 +337,7 @@ async function actionProbe(args) {
       events_count: (turn.events || []).length,
     }, providerOutput);
 
-    process.stderr.write(`[buddy] probe completed in ${latencyMs}ms, verdict=${parsed.data?.verdict || parsed.mode}\n`);
+    process.stderr.write(`[buddy] probe completed in ${latencyMs}ms, verdict=${kimiVerdict?.verdict || parsed.data?.verdict || parsed.mode}\n`);
 
     output({
       status: 'verified',
@@ -349,6 +361,7 @@ async function actionProbe(args) {
       runtime: turn.runtime,
       broker_fallback: turn.brokerFallback || false,
       broker_fallback_reason: turn.brokerFallbackReason || null,
+      degraded: turn.degraded || false,
       resumed: !!turn.resumed,
       followup_available: buddyModel === 'codex' && !turn.ephemeral && !!turn.codexSessionId,
       followup_recommended: followupRecommended,
@@ -357,6 +370,8 @@ async function actionProbe(args) {
       parse_status: turn.parseStatus,
       fallback: turn.fallback,
       events_count: (turn.events || []).length,
+      verdict: kimiVerdict?.verdict || parsed.data?.verdict || null,
+      review_status: kimiVerdict?.reviewStatus || null,
       structured: parsed.data,
     });
   } catch (e) {

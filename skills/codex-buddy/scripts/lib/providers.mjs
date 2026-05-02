@@ -129,6 +129,7 @@ async function startKimiTurn({
       return {
         ...wire,
         latencyMs,
+        degraded: false,
         events: [
           { type: 'provider_event', subtype: 'turn/started', payload: { provider: 'kimi', transport: 'wire' } },
           ...(wire.events || []),
@@ -199,6 +200,7 @@ function startKimiExecTurn({
     fallback: fallback === 'none'
       ? (result.parseStatus !== 'failed' ? 'none' : 'raw')
       : fallback,
+    degraded: true,
     exitCode: result.exitCode,
     errorCode: result.errorCode || null,
     stderrTail: result.stderrTail || '',

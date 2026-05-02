@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.2.0
+v3.2.1
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -14,11 +14,11 @@ HEALTHY
 
 ## confirmed_failures
 <!-- 格式: [F-ID] 描述 | 证据: <文件:行或讨论链接> | 状态: OPEN|FIXED -->
-NONE
+[F-001] Kimi legacy/print-style review could produce empty output or protocol transcript that looked like a completed review | 证据: user screenshot 2026-05-02; skills/codex-buddy/scripts/lib/__tests__/kimi-wire-client.test.mjs | 状态: FIXED
 
 ## root_cause_hypotheses
 <!-- 格式: [H-ID] 假设 | 对应失败: <F-ID> -->
-NONE
+[H-001] Kimi CLI legacy output is not a stable review transport; empty final output and noisy transcript must be classified before runtime can claim review success | 对应失败: F-001
 
 ## work_queue
 <!-- 统一待办队列。done_when 必须是可由命令/文件验证的条件，不能是主观判断 -->
