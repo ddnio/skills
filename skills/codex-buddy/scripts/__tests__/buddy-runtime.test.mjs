@@ -650,6 +650,8 @@ rl.on('line', (line) => {
       assert.equal(json.provider, 'kimi');
       assert.equal(json.transport, 'wire');
       assert.equal(json.runtime, 'wire');
+      assert.equal(json.review_status, 'inconclusive');
+      assert.equal(json.verdict, 'INCONCLUSIVE');
       assert.match(json.evidence_summary[0], /runtime wire final/);
       assert.ok(json.events_count >= 3);
     } finally {
@@ -686,6 +688,8 @@ console.log('runtime exec final');
       const json = JSON.parse(r.stdout);
       assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
       assert.equal(json.transport, 'exec');
+      assert.equal(json.degraded, true);
+      assert.equal(json.review_status, 'inconclusive');
       assert.match(json.evidence_summary[0], /runtime exec final/);
     } finally {
       fs.rmSync(evidence, { force: true });
@@ -761,6 +765,51 @@ process.exit(0);
       assert.equal(json.status, 'error', `stdout=${r.stdout} stderr=${r.stderr}`);
       assert.equal(json.rule, 'kimi-empty-output');
       assert.match(json.message, /auth required/);
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(fakeKimi, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('--action probe with kimi normalizes GO verdict', () => {
+    const evidence = path.join(os.tmpdir(), `kimi-go-${Date.now()}.txt`);
+    const fakeKimi = path.join(os.tmpdir(), `fake-kimi-go-${Date.now()}.mjs`);
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-kimi-go-'));
+    fs.writeFileSync(evidence, 'task_to_judge: kimi go\nraw_evidence: x\nknown_omissions: none\n');
+    fs.writeFileSync(fakeKimi, `#!/usr/bin/env node
+import readline from 'node:readline';
+if (process.argv.includes('--version')) {
+  console.log('kimi, version fake');
+  process.exit(0);
+}
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'prompt') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { text: 'GO\\nNo blockers.' } });
+    process.exit(0);
+  }
+});
+`);
+    fs.chmodSync(fakeKimi, 0o755);
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'probe', '--buddy-model', 'kimi',
+         '--evidence', evidence, '--project-dir', '/tmp', '--session-id', `kimi-go-${Date.now()}`],
+        {
+          encoding: 'utf8',
+          timeout: 10000,
+          env: { ...process.env, BUDDY_KIMI_BIN: fakeKimi, BUDDY_HOME: tmpHome },
+        },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.verdict, 'GO');
+      assert.equal(json.review_status, 'passed');
     } finally {
       fs.rmSync(evidence, { force: true });
       fs.rmSync(fakeKimi, { force: true });

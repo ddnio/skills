@@ -79,6 +79,11 @@ export async function runKimiWireTurn(prompt, opts = {}) {
       .map((event) => event.payload.text)
       .filter(Boolean)
       .join('');
+    if (!finalMessage.trim()) {
+      throw Object.assign(new Error('Kimi wire returned empty final output'), {
+        code: 'kimi-empty-output',
+      });
+    }
 
     return {
       provider: 'kimi',

@@ -151,3 +151,27 @@ rl.on('line', (line) => {
     fs.rmSync(marker, { force: true });
   }
 });
+
+test('runKimiWireTurn rejects empty final output', async () => {
+  const fakeKimi = fakeWireScript(`
+import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'prompt') {
+    send({ jsonrpc: '2.0', id: msg.id, result: {} });
+    process.exit(0);
+  }
+});
+`);
+  try {
+    await assert.rejects(
+      () => withFakeKimi(fakeKimi, () => runKimiWireTurn('hello', { projectDir: '/tmp', timeoutMs: 2000 })),
+      (err) => err.code === 'kimi-empty-output' && /empty final output/i.test(err.message),
+    );
+  } finally {
+    fs.rmSync(fakeKimi, { force: true });
+  }
+});

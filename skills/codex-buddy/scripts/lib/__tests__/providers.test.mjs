@@ -128,7 +128,40 @@ process.exit(0);
       }));
       assert.equal(result.transport, 'exec');
       assert.equal(result.fallback, 'wire-to-exec');
+      assert.equal(result.degraded, true);
       assert.equal(result.finalMessage, 'exec provider result');
+    } finally {
+      fs.rmSync(fakeKimi, { force: true });
+    }
+  });
+
+  test('kimi startTurn does not fall back from wire timeout', async () => {
+    const fakeKimi = fakeProviderKimi(`
+import readline from 'node:readline';
+if (process.argv.includes('--version')) {
+  console.log('kimi, version fake');
+  process.exit(0);
+}
+if (!process.argv.includes('--wire')) {
+  console.log('exec fallback must not run');
+  process.exit(0);
+}
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+});
+`);
+    try {
+      await assert.rejects(
+        () => withFakeKimi(fakeKimi, () => getProvider('kimi').startTurn({
+          prompt: 'review',
+          projectDir: '/tmp',
+          timeoutMs: 50,
+        })),
+        (err) => err.code === 'kimi-wire-timeout',
+      );
     } finally {
       fs.rmSync(fakeKimi, { force: true });
     }
