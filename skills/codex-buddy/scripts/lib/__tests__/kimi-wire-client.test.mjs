@@ -46,13 +46,20 @@ rl.on('line', (line) => {
 });
 `);
   try {
-    const result = await withFakeKimi(fakeKimi, () => runKimiWireTurn('hello', { projectDir: '/tmp', timeoutMs: 2000 }));
+    const streamed = [];
+    const result = await withFakeKimi(fakeKimi, () => runKimiWireTurn('hello', {
+      projectDir: '/tmp',
+      timeoutMs: 2000,
+      onEvent: (event) => streamed.push(event),
+    }));
     assert.equal(result.transport, 'wire');
     assert.equal(result.runtime, 'wire');
     assert.equal(result.finalMessage, 'final hello');
     assert.equal(result.events.length, 1);
     assert.equal(result.events[0].subtype, 'kimi/content');
     assert.equal(result.events[0].payload.text, 'streamed hello');
+    assert.equal(streamed.length, 1);
+    assert.equal(streamed[0].payload.text, 'streamed hello');
   } finally {
     fs.rmSync(fakeKimi, { force: true });
   }

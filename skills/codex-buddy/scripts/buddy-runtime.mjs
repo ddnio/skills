@@ -118,6 +118,49 @@ function readAllStdin() {
   });
 }
 
+function createProviderProgressReporter({ buddySessionId, verificationTaskId, provider, startedAt }) {
+  const stats = {
+    contentChunks: 0,
+    contentChars: 0,
+    eventCount: 0,
+    lastAt: null,
+    lastSubtype: null,
+    lastRawType: null,
+    nextReportAt: startedAt + 2_000,
+  };
+
+  return {
+    stats,
+    onEvent(event) {
+      const now = Date.now();
+      stats.eventCount += 1;
+      stats.lastAt = now;
+      stats.lastSubtype = event?.subtype || null;
+      stats.lastRawType = event?.payload?.raw_type || null;
+      if (event?.subtype === 'kimi/content') {
+        stats.contentChunks += 1;
+        stats.contentChars += String(event.payload?.text || '').length;
+      }
+
+      if (now < stats.nextReportAt) return;
+      stats.nextReportAt = now + 5_000;
+      const elapsed = Math.round((now - startedAt) / 1000);
+      appendSessionEvent(buddySessionId, verificationTaskId, 'probe.provider_progress', {
+        provider,
+        events_count: stats.eventCount,
+        content_chunks: stats.contentChunks,
+        content_chars: stats.contentChars,
+        last_event_subtype: stats.lastSubtype,
+        last_raw_type: stats.lastRawType,
+        elapsed_s: elapsed,
+      });
+      process.stderr.write(
+        `[buddy] ${provider} streaming: chunks=${stats.contentChunks}, chars=${stats.contentChars}, elapsed=${elapsed}s\n`,
+      );
+    },
+  };
+}
+
 /**
  * Read evidence from --evidence (file path or "-" for stdin) or --evidence-stdin.
  * Returns { ok, prompt, source, error }.
@@ -253,6 +296,12 @@ async function actionProbe(args) {
   }, prompt);
 
   const schemaFile = fs.existsSync(CODEX_OUTPUT_SCHEMA) ? CODEX_OUTPUT_SCHEMA : null;
+  const progress = createProviderProgressReporter({
+    buddySessionId,
+    verificationTaskId,
+    provider: buddyModel,
+    startedAt: startTime,
+  });
   try {
     const turn = await provider.startTurn({
       prompt,
@@ -264,6 +313,7 @@ async function actionProbe(args) {
       ephemeral: args.ephemeral,
       freshThread: args['fresh-thread'] === 'true',
       startTime,
+      onEvent: buddyModel === 'kimi' ? progress.onEvent : null,
     });
     const providerOutput = turn.finalMessage || '';
     const parsed = buddyModel === 'codex'
@@ -375,11 +425,32 @@ async function actionProbe(args) {
       structured: parsed.data,
     });
   } catch (e) {
+    const progressStats = progress.stats;
+    const progressMessage = progressStats.eventCount
+      ? `; streamed_events=${progressStats.eventCount}, content_chunks=${progressStats.contentChunks}, content_chars=${progressStats.contentChars}, last_event=${progressStats.lastSubtype || 'unknown'}`
+      : '';
     appendSessionEvent(buddySessionId, verificationTaskId, 'probe.error', {
-      message: e.message.split('\n')[0],
+      message: `${e.message.split('\n')[0]}${progressMessage}`,
       provider: buddyModel,
+      events_count: progressStats.eventCount,
+      content_chunks: progressStats.contentChunks,
+      content_chars: progressStats.contentChars,
+      last_event_subtype: progressStats.lastSubtype,
+      last_raw_type: progressStats.lastRawType,
     });
-    output({ status: 'error', rule: e.code || `${buddyModel}-failed`, message: e.message.split('\n')[0], verification_task_id: verificationTaskId });
+    output({
+      status: 'error',
+      rule: e.code || `${buddyModel}-failed`,
+      message: `${e.message.split('\n')[0]}${progressMessage}`,
+      verification_task_id: verificationTaskId,
+      ...(progressStats.eventCount ? {
+        streamed_events: progressStats.eventCount,
+        content_chunks: progressStats.contentChunks,
+        content_chars: progressStats.contentChars,
+        last_event_subtype: progressStats.lastSubtype,
+        last_raw_type: progressStats.lastRawType,
+      } : {}),
+    });
   }
 }
 

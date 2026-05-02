@@ -18,21 +18,26 @@ export async function runKimiWireTurn(prompt, opts = {}) {
   client.onNotification((msg) => {
     if (msg.method === 'event') {
       const normalized = normalizeWireEvent(msg.params || {});
-      if (normalized) events.push(normalized);
+      if (normalized) {
+        events.push(normalized);
+        notifyEvent(opts.onEvent, normalized);
+      }
       return;
     }
 
     if (msg.method === 'request' && msg.id !== undefined) {
       const request = msg.params?.payload || msg.params?.request || {};
       const requestType = msg.params?.type || request.type || null;
-      events.push({
+      const event = {
         type: 'provider_event',
         subtype: 'kimi/request_rejected',
         payload: {
           request_type: requestType,
           reason: 'unsupported wire request in codex-buddy review mode',
         },
-      });
+      };
+      events.push(event);
+      notifyEvent(opts.onEvent, event);
       client.respondResult(msg.id, buildRejectedRequestResult(requestType, request));
     }
   });
@@ -255,6 +260,11 @@ function extractText(value) {
     return parts.map(extractText).filter(Boolean).join('\n\n');
   }
   return '';
+}
+
+function notifyEvent(handler, event) {
+  if (typeof handler !== 'function') return;
+  try { handler(event); } catch {}
 }
 
 function buildRejectedRequestResult(type, request) {

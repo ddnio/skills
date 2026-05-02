@@ -50,7 +50,7 @@ node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action replay --session-id buddy-
 
 **Provider / transport 语义：**
 - `--buddy-model codex`（默认）：支持 `broker | app-server | exec`。broker 默认启用，走官方 app-server 事件协议；启动失败会回退 exec；`BUDDY_USE_LEGACY_EXEC=1` 或 `BUDDY_USE_BROKER=0` 可强制 exec。
-- `--buddy-model kimi`：只走 Kimi CLI exec path，当前使用 final-message 输出并映射为 provider events；不支持 `--fresh-thread` 或 Codex broker thread。
+- `--buddy-model kimi`：默认走 Wire transport（`kimi --wire`，流式 JSON-RPC，有 async timeout + cancel-before-kill）；Wire 失败时自动 fallback 到 exec。**不要直接调用 `kimi --quiet -p "..."`** — 无 timeout 保护，大 prompt 会挂死。详见 [`references/kimi-cli.md`](./kimi-cli.md)。不支持 `--fresh-thread` 或 Codex broker thread。
 - `buddy_session_id` 是审计 ID；`codex_session_id` 是 exec resume ID；broker `threadId` 属于 app-server namespace，不写入 exec session pointer。
 
 **会话事件日志：** runtime 自动把每次交互写入 `~/.buddy/sessions/<buddy-session-id>.jsonl`：

@@ -110,6 +110,7 @@ async function startKimiTurn({
   projectDir,
   model = null,
   timeoutMs,
+  onEvent = null,
 } = {}) {
   const available = kimiPreflight();
   if (!available.ok) {
@@ -123,7 +124,7 @@ async function startKimiTurn({
   if (transport === 'wire') {
     try {
       process.stderr.write('[buddy] kimi wire probe started, ETA 30-80s\n');
-      const wire = await runKimiWireTurn(prompt, { projectDir, timeoutMs });
+      const wire = await runKimiWireTurn(prompt, { projectDir, timeoutMs, onEvent });
       const latencyMs = Date.now() - startedAt;
       process.stderr.write(`[buddy] kimi wire probe completed in ${latencyMs}ms\n`);
       return {
