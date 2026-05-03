@@ -142,6 +142,7 @@ check_tree "scripts"
 check_tree "schemas"
 check_tree "hooks"
 check_tree "evals"
+check_tree ".claude-plugin"
 
 # ── 最终结果 ─────────────────────────────────────────────────
 if [ "$FAIL" -eq 0 ]; then

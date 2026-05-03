@@ -31,7 +31,7 @@ if [ -L "$SKILL_DST" ]; then
   exit 0
 fi
 
-mkdir -p "$SKILL_DST/references" "$SKILL_DST/scripts/lib" "$SKILL_DST/schemas" "$SKILL_DST/hooks" "$SKILL_DST/evals"
+mkdir -p "$SKILL_DST/references" "$SKILL_DST/scripts/lib" "$SKILL_DST/schemas" "$SKILL_DST/hooks" "$SKILL_DST/evals" "$SKILL_DST/.claude-plugin"
 
 # 同步运行时文件（rsync --delete 清理已删除文件）
 if command -v rsync &>/dev/null; then
@@ -40,17 +40,19 @@ if command -v rsync &>/dev/null; then
   rsync -a --delete "$SKILL_DIR/schemas/" "$SKILL_DST/schemas/"
   rsync -a --delete "$SKILL_DIR/hooks/" "$SKILL_DST/hooks/"
   rsync -a --delete "$SKILL_DIR/evals/" "$SKILL_DST/evals/"
+  rsync -a --delete "$SKILL_DIR/.claude-plugin/" "$SKILL_DST/.claude-plugin/"
   cp "$SKILL_DIR/SKILL.md" "$SKILL_DST/"
   cp "$SKILL_DIR/STATUS.md" "$SKILL_DST/"
   cp "$SKILL_DIR/CHANGELOG.md" "$SKILL_DST/"
 else
   # fallback: 先清空再复制
-  rm -rf "$SKILL_DST/references" "$SKILL_DST/scripts" "$SKILL_DST/schemas" "$SKILL_DST/hooks" "$SKILL_DST/evals"
+  rm -rf "$SKILL_DST/references" "$SKILL_DST/scripts" "$SKILL_DST/schemas" "$SKILL_DST/hooks" "$SKILL_DST/evals" "$SKILL_DST/.claude-plugin"
   cp -R "$SKILL_DIR/references" "$SKILL_DST/"
   cp -R "$SKILL_DIR/scripts" "$SKILL_DST/"
   cp -R "$SKILL_DIR/schemas" "$SKILL_DST/"
   cp -R "$SKILL_DIR/hooks" "$SKILL_DST/"
   cp -R "$SKILL_DIR/evals" "$SKILL_DST/"
+  cp -R "$SKILL_DIR/.claude-plugin" "$SKILL_DST/"
   cp "$SKILL_DIR/SKILL.md" "$SKILL_DST/"
   cp "$SKILL_DIR/STATUS.md" "$SKILL_DST/"
   cp "$SKILL_DIR/CHANGELOG.md" "$SKILL_DST/"
@@ -68,4 +70,4 @@ if [ "$HOST" = "claude" ]; then
 fi
 
 echo "[sync-skill] Synced: $SKILL_DIR -> $SKILL_DST (host: $HOST)"
-echo "  SKILL.md + STATUS.md + CHANGELOG.md + references/ + scripts/ + schemas/ + hooks/ + evals/"
+echo "  SKILL.md + STATUS.md + CHANGELOG.md + .claude-plugin/ + references/ + scripts/ + schemas/ + hooks/ + evals/"

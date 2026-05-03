@@ -4,6 +4,21 @@
 
 ---
 
+## v3.3.4 — 2026-05-03 Kimi verdict fail-closed status
+
+### Content
+- **`buddy-runtime.mjs`**：Kimi final text must start with a recognizable `GO` to return top-level `status: "verified"`.
+- **`buddy-runtime.mjs`**：Kimi `NO-GO` now returns `status: "blocked"` / `rule: "kimi-no-go"` and exits non-zero; Kimi `INCONCLUSIVE` now returns recoverable `status: "error"` / `rule: "kimi-inconclusive"` and exits non-zero.
+- **`buddy-runtime.mjs --action status`**：preserves `probe.completed.final_state` instead of mapping every completed marker to `host_state: "completed"`.
+- **`sync-skill.sh` / `verify-install.sh`**：sync and verify `.claude-plugin/` so installed runtime paths that import plugin metadata do not crash.
+- **测试**：覆盖自由文本 Kimi 输出不再 verified、NO-GO blocked、非 GO 退出码非 0、recoverable_error 状态读取。
+
+### 架构决策
+- Runtime-level completion is not the same as review pass. Kimi output is a pass only when it has a machine-readable `GO`; free text is audit evidence, not approval, and must fail both JSON status and CLI exit status.
+- Host integrations should use `status`, `review_status`, and `host_state` together. A `probe.completed` marker with `recoverable_error` means the background process ended, but the review did not pass.
+
+---
+
 ## v3.3.3 — 2026-05-03 Completion handshake and trigger hardening
 
 ### Content

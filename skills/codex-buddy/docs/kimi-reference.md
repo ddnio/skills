@@ -74,9 +74,9 @@ Kimi final text is normalized locally into:
 
 | Verdict | `review_status` | Meaning |
 |---------|-----------------|---------|
-| `GO` | `passed` | No blocker was reported in a recognizable verdict line |
-| `NO-GO` | `blocked` | A blocker was reported |
-| `INCONCLUSIVE` | `inconclusive` | Output was unstructured or did not start with a supported verdict |
+| `GO` | `passed` | No blocker was reported in a recognizable verdict line; top-level status is `verified`, process exit is 0 |
+| `NO-GO` | `blocked` | A blocker was reported; top-level status is `blocked`, process exit is non-zero |
+| `INCONCLUSIVE` | `inconclusive` | Output was unstructured or did not start with a supported verdict; top-level status is recoverable `error`, process exit is non-zero |
 
 Unstructured text is preserved in the audit log but does not count as a clean
 pass.

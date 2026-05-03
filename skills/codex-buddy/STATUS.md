@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.3.3
+v3.3.4
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -17,12 +17,16 @@ HEALTHY
 [F-001] Kimi legacy/print-style review could produce empty output or protocol transcript that looked like a completed review | 证据: user screenshot 2026-05-02; skills/codex-buddy/scripts/lib/__tests__/kimi-wire-client.test.mjs | 状态: FIXED
 [F-002] Kimi Wire can stream thousands of non-text events for 120s while producing no review text, making the host agent appear blocked | 证据: ~/.buddy/sessions/buddy-a492dd94.jsonl vtask-mophbony-ac3a06af/vtask-mopgvkxk-cfc35552; skills/codex-buddy/scripts/lib/__tests__/kimi-wire-client.test.mjs | 状态: FIXED
 [F-003] Runtime can complete a Kimi/Codex probe while the host/background terminal still appears to be waiting | 证据: ~/.buddy/sessions/buddy-a492dd94.jsonl vtask-moplfy9y-a566c09b completed in ~70s while screenshot showed waiting; skills/codex-buddy/scripts/__tests__/buddy-runtime.test.mjs | 状态: FIXED
+[F-004] Kimi provider could return top-level verified, or process exit 0, for free-text/NO-GO output whose normalized review_status was not passed | 证据: user screenshot 2026-05-03; /private/tmp/buddy-kimi-verdict-small/sessions/buddy-kimi-verdict-small.jsonl vtask-mopwkdm5-404ca444; skills/codex-buddy/scripts/__tests__/buddy-runtime.test.mjs | 状态: FIXED
+[F-005] Installed codex-buddy runtime could crash importing app-server.mjs because sync-skill did not install .claude-plugin/plugin.json and verify-install did not check it | 证据: installed runtime error 2026-05-03; skills/codex-buddy/scripts/sync-skill.sh; skills/codex-buddy/scripts/verify-install.sh | 状态: FIXED
 
 ## root_cause_hypotheses
 <!-- 格式: [H-ID] 假设 | 对应失败: <F-ID> -->
 [H-001] Kimi CLI legacy output is not a stable review transport; empty final output and noisy transcript must be classified before runtime can claim review success | 对应失败: F-001
 [H-002] Kimi Wire no-text event streams are provider no-progress failures; waiting for total timeout hides the actual state and creates avoidable customer friction | 对应失败: F-002
 [H-003] Host/runtime desync lacked an authoritative completion handshake/status reader; meta planning prompts about codex-buddy/Kimi also needed machine-checkable probe-trigger coverage | 对应失败: F-003
+[H-004] Runtime completion was conflated with review approval; Kimi verdict normalization produced review_status=inconclusive/blocked but actionProbe still returned verified JSON or a successful CLI exit path | 对应失败: F-004
+[H-005] Installed-copy verification covered runtime asset trees but omitted .claude-plugin even though app-server.mjs imports plugin metadata at module load | 对应失败: F-005
 
 ## work_queue
 <!-- 统一待办队列。done_when 必须是可由命令/文件验证的条件，不能是主观判断 -->
@@ -99,6 +103,15 @@ HEALTHY
   done_when: "probe writes probe.completed and optional completion marker; --action status returns completed by verification_task_id; Kimi thinking-only returns kimi-wire-thinking-only; eval id 31 requires V2[META]+buddy/Codex probe"
   status: done
 
+- id: W-022
+  type: fix
+  title: Kimi verdict fail-closed status
+  source: user feedback 2026-05-03: Kimi free-text/no-output states must not be treated as passed review
+  impact: high
+  reversibility: safe
+  done_when: "Kimi free-text output returns kimi-inconclusive recoverable error with non-zero process exit; Kimi NO-GO returns blocked with non-zero process exit; --action status preserves recoverable_error final_state; installed copy contains .claude-plugin/plugin.json and verify-install checks it"
+  status: done
+
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
 NONE
@@ -119,7 +132,7 @@ NONE
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-W-021 closes the host/runtime stale-waiting gap with an explicit completion handshake and prevents codex-buddy/Kimi meta planning prompts from bypassing buddy probe.
+W-022 closes the remaining Kimi approval/status and installed-runtime asset gaps: runtime completion is no longer treated as review pass unless Kimi emits a machine-readable GO, non-GO paths fail JSON status plus process exit status, and installed app-server imports have plugin metadata.
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->
@@ -134,4 +147,4 @@ NONE
 FIXED
 
 ## last_round_notes
-v3.3.3: W-021 completion handshake and trigger hardening landed. Runtime now writes probe.completed plus optional completion markers, --action status reads authoritative task state, Kimi thinking-only is recoverable but not accepted as review text, and meta optimization prompts for codex-buddy/Kimi require buddy/Codex probe evidence.
+v3.3.4: W-022 Kimi verdict fail-closed status landed. Kimi free-text output now returns recoverable kimi-inconclusive instead of verified and exits non-zero, NO-GO returns blocked and exits non-zero, --action status preserves recoverable_error host_state, and .claude-plugin is synced/verified for installed runtime.

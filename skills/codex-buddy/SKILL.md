@@ -106,7 +106,7 @@ probe 启动后到结果回来之间，**不要 narrate** "准备证据"/"调用
 - **各方独有**：一方发现而另一方未提及的内容
 - **[unresolved]**：有分歧但无法当场验证的内容
 
-Codex 不保证遵守格式 → 提取不出结构时标 `unstructured`，整体参考。
+Codex 不保证遵守格式 → 提取不出结构时标 `unstructured`；Kimi 只有机器可识别的 `GO` 才算通过，`NO-GO` blocked，自由文本/`INCONCLUSIVE` recoverable error。
 完整 CLI 模板见 [`references/cli-examples.md`](./references/cli-examples.md)
 
 ---

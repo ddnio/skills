@@ -826,11 +826,15 @@ console.log('quiet final answer from kimi');
         },
       );
       const json = JSON.parse(r.stdout);
-      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(r.status, 1, `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.status, 'error', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.rule, 'kimi-inconclusive');
       assert.equal(json.provider, 'kimi');
       assert.equal(json.transport, 'exec');
       assert.match(json.evidence_summary[0], /quiet final answer from kimi/);
       assert.notEqual(json.evidence_summary[0], 'kimi: ');
+      assert.equal(json.review_status, 'inconclusive');
+      assert.equal(json.recoverable, true);
     } finally {
       fs.rmSync(evidence, { force: true });
       fs.rmSync(fakeKimi, { force: true });
@@ -873,12 +877,16 @@ rl.on('line', (line) => {
         },
       );
       const json = JSON.parse(r.stdout);
-      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(r.status, 1, `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.status, 'error', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.rule, 'kimi-inconclusive');
       assert.equal(json.provider, 'kimi');
       assert.equal(json.transport, 'wire');
       assert.equal(json.runtime, 'wire');
       assert.equal(json.review_status, 'inconclusive');
       assert.equal(json.verdict, 'INCONCLUSIVE');
+      assert.equal(json.recoverable, true);
+      assert.match(json.recovery_hint, /--buddy-model codex|GO verdict/i);
       assert.match(json.evidence_summary[0], /runtime wire final/);
       assert.ok(json.events_count >= 3);
     } finally {
@@ -1039,6 +1047,42 @@ rl.on('line', (line) => {
     }
   });
 
+  test('--action status preserves recoverable_error completion state', async () => {
+    const { appendSessionEvent } = await import('../lib/session-log.mjs');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-status-recoverable-'));
+    const sid = `status-recoverable-${Date.now()}`;
+    const taskId = 'vtask-status-recoverable';
+    const prevHome = process.env.BUDDY_HOME;
+    try {
+      process.env.BUDDY_HOME = tmpHome;
+      appendSessionEvent(sid, taskId, 'probe.start', { provider: 'kimi', rule: 'test' }, 'evidence');
+      appendSessionEvent(sid, taskId, 'probe.completed', {
+        final_state: 'recoverable_error',
+        provider: 'kimi',
+        rule: 'kimi-inconclusive',
+        message: 'Kimi review was inconclusive',
+        exit_code: 1,
+      });
+
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'status', '--project-dir', '/tmp', '--session-id', sid,
+         '--verification-task-id', taskId],
+        { encoding: 'utf8', timeout: 10000, env: { ...process.env, BUDDY_HOME: tmpHome } },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'ok', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.final_state, 'recoverable_error');
+      assert.equal(json.host_state, 'recoverable_error');
+      assert.equal(json.provider, 'kimi');
+      assert.equal(json.rule, 'kimi-inconclusive');
+    } finally {
+      if (prevHome === undefined) delete process.env.BUDDY_HOME;
+      else process.env.BUDDY_HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   test('--action probe with kimi can force legacy exec transport', () => {
     const evidence = path.join(os.tmpdir(), `kimi-exec-runtime-${Date.now()}.txt`);
     const fakeKimi = path.join(os.tmpdir(), `fake-kimi-exec-runtime-${Date.now()}.mjs`);
@@ -1064,10 +1108,13 @@ console.log('runtime exec final');
         },
       );
       const json = JSON.parse(r.stdout);
-      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(r.status, 1, `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.status, 'error', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.rule, 'kimi-inconclusive');
       assert.equal(json.transport, 'exec');
       assert.equal(json.degraded, true);
       assert.equal(json.review_status, 'inconclusive');
+      assert.equal(json.recoverable, true);
       assert.match(json.evidence_summary[0], /runtime exec final/);
     } finally {
       fs.rmSync(evidence, { force: true });
@@ -1185,9 +1232,59 @@ rl.on('line', (line) => {
         },
       );
       const json = JSON.parse(r.stdout);
+      assert.equal(r.status, 0, `stdout=${r.stdout} stderr=${r.stderr}`);
       assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
       assert.equal(json.verdict, 'GO');
       assert.equal(json.review_status, 'passed');
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(fakeKimi, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('--action probe with kimi treats NO-GO as blocked', () => {
+    const evidence = path.join(os.tmpdir(), `kimi-no-go-${Date.now()}.txt`);
+    const fakeKimi = path.join(os.tmpdir(), `fake-kimi-no-go-${Date.now()}.mjs`);
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-kimi-no-go-'));
+    fs.writeFileSync(evidence, 'task_to_judge: kimi no-go\nraw_evidence: x\nknown_omissions: none\n');
+    fs.writeFileSync(fakeKimi, `#!/usr/bin/env node
+import readline from 'node:readline';
+if (process.argv.includes('--version')) {
+  console.log('kimi, version fake');
+  process.exit(0);
+}
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'prompt') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { text: 'NO-GO\\nBlocking issue.' } });
+    process.exit(0);
+  }
+});
+`);
+    fs.chmodSync(fakeKimi, 0o755);
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'probe', '--buddy-model', 'kimi',
+         '--evidence', evidence, '--project-dir', '/tmp', '--session-id', `kimi-no-go-${Date.now()}`],
+        {
+          encoding: 'utf8',
+          timeout: 10000,
+          env: { ...process.env, BUDDY_KIMI_BIN: fakeKimi, BUDDY_HOME: tmpHome },
+        },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(r.status, 1, `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.status, 'blocked', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.rule, 'kimi-no-go');
+      assert.equal(json.verdict, 'NO-GO');
+      assert.equal(json.review_status, 'blocked');
+      assert.notEqual(json.recoverable, true);
+      assert.match(json.message, /blocking review result/i);
     } finally {
       fs.rmSync(evidence, { force: true });
       fs.rmSync(fakeKimi, { force: true });

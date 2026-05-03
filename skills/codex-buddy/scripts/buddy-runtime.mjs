@@ -63,6 +63,44 @@ function normalizeKimiVerdict(text) {
   return { verdict: 'INCONCLUSIVE', reviewStatus: 'inconclusive' };
 }
 
+function isKimiCleanPass(kimiVerdict) {
+  return kimiVerdict?.reviewStatus === 'passed';
+}
+
+function kimiProbeOutcome(kimiVerdict) {
+  if (isKimiCleanPass(kimiVerdict)) {
+    return {
+      finalState: 'completed',
+      status: 'verified',
+      rule: null,
+      exitCode: 0,
+      recoverable: false,
+      message: null,
+      recoveryHint: null,
+    };
+  }
+  if (kimiVerdict?.reviewStatus === 'blocked') {
+    return {
+      finalState: 'blocked',
+      status: 'blocked',
+      rule: 'kimi-no-go',
+      exitCode: 1,
+      recoverable: false,
+      message: 'Kimi review returned NO-GO. Treat this as a blocking review result, not a passed verification.',
+      recoveryHint: null,
+    };
+  }
+  return {
+    finalState: 'recoverable_error',
+    status: 'error',
+    rule: 'kimi-inconclusive',
+    exitCode: 1,
+    recoverable: true,
+    message: `Kimi review was inconclusive: verdict=${kimiVerdict?.verdict || 'INCONCLUSIVE'}. Require GO before treating this as passed.`,
+    recoveryHint: 'Kimi returned output but no GO verdict. Treat this review as inconclusive, retry Kimi with an explicit GO/NO-GO instruction, or run the same evidence with --buddy-model codex.',
+  };
+}
+
 // Detect whether Codex output contains open questions needing follow-up.
 function hasQuestions(parsed, rawText) {
   if (parsed.mode === 'structured') {
@@ -473,16 +511,30 @@ async function actionProbe(args) {
       progress_stats: turn.progress || progress.stats,
     }, providerOutput);
 
+    const probeOutcome = buddyModel === 'kimi'
+      ? kimiProbeOutcome(kimiVerdict)
+      : {
+          finalState: 'completed',
+          status: 'verified',
+          rule: envelope.rule,
+          exitCode: turn.exitCode ?? 0,
+          recoverable: false,
+          message: null,
+          recoveryHint: null,
+        };
+    const resultRule = probeOutcome.rule || envelope.rule;
+
     const completedPayload = buildCompletionPayload({
       buddySessionId,
       verificationTaskId,
       provider: turn.provider,
       transport: turn.transport,
       runtime: turn.runtime,
-      finalState: 'completed',
+      finalState: probeOutcome.finalState,
       startedAt: startTime,
-      exitCode: turn.exitCode ?? 0,
-      rule: envelope.rule,
+      exitCode: probeOutcome.exitCode,
+      rule: resultRule,
+      message: probeOutcome.message,
     });
     appendSessionEventBestEffort(buddySessionId, verificationTaskId, 'probe.completed', completedPayload);
     writeCompletionMarkerBestEffort(args['completion-marker'], completedPayload);
@@ -490,8 +542,8 @@ async function actionProbe(args) {
     process.stderr.write(`[buddy] probe completed in ${latencyMs}ms, verdict=${kimiVerdict?.verdict || parsed.data?.verdict || parsed.mode}\n`);
 
     output({
-      status: 'verified',
-      rule: envelope.rule,
+      status: probeOutcome.status,
+      rule: resultRule,
       route: buddyModel,
       provider: turn.provider,
       model: buddyModel,
@@ -524,8 +576,12 @@ async function actionProbe(args) {
       progress_stats: turn.progress || progress.stats,
       verdict: kimiVerdict?.verdict || parsed.data?.verdict || null,
       review_status: kimiVerdict?.reviewStatus || null,
+      recoverable: probeOutcome.recoverable || undefined,
+      recovery_hint: probeOutcome.recoveryHint || undefined,
+      message: probeOutcome.message || undefined,
       structured: parsed.data,
     });
+    process.exitCode = probeOutcome.exitCode;
   } catch (e) {
     const progressStats = progress.stats;
     const progressMessage = progressStats.eventCount
@@ -866,12 +922,13 @@ async function actionStatus(args) {
   const taskId = completed?.verification_task_id || outputEvent?.verification_task_id || errorEvent?.verification_task_id || startEvent?.verification_task_id || args['verification-task-id'] || null;
 
   if (completed) {
+    const finalState = completed.final_state || 'completed';
     output({
       status: 'ok',
       session_id: buddySessionId,
       verification_task_id: taskId,
-      final_state: completed.final_state || 'completed',
-      host_state: 'completed',
+      final_state: finalState,
+      host_state: finalState,
       provider: completed.provider || outputEvent?.provider || startEvent?.provider || null,
       transport: completed.transport || outputEvent?.transport || null,
       runtime: completed.runtime || outputEvent?.runtime || null,
