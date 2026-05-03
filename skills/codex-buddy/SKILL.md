@@ -60,6 +60,7 @@ Gate 触发后：先 **local evidence**（grep/test/lint）→ 不够再 **buddy
 
 **默认证据传递：file-first。** 先写 evidence 文件（`.omc/state/buddy-evidence-<ts>.txt`，无 `.omc` 时用 `.buddy-evidence-<ts>.txt`），再调用 `node ".../buddy-runtime.mjs" --action probe --evidence <file> --project-dir "$PWD"`。`--evidence-stdin` 只允许同命令真实 pipe/heredoc（如 `cat <file> | node ... --evidence-stdin`）；TTY/empty stdin 是提示设计失败，改 file-first，不归咎用户。
 Codex provider 默认走官方 app-server/broker，`read-only` + `approval never`；遇 sandbox/approval 阻塞先改 local/file evidence 或缩小只读证据包，只有任务确实需要写/网/破坏性权限时才一次性向用户说明并请求授权。Kimi 默认走 `kimi --wire`。AI 工具对接摩擦（提示/输入/provider/沙箱/审计）都按本项目问题兜底；不得归咎客户或上游模型。runtime 写 `~/.buddy/sessions/<sid>.jsonl` 仅作审计/replay；审计失败不得阻塞 probe 主结果。
+讨论 codex-buddy/Kimi/provider/触发机制的“最佳方案/再想想/怎么优化”属于 V2[META]，必须 Route；宿主终端疑似 stale 时用 `--action status` / `probe.completed` / completion marker 判定真实完成态。
 
 **复用机制（不要混淆）：** `buddy_session_id` 只做审计；`--session-policy isolated|conversation` 只控 Codex exec resume；`--fresh-thread` 只控 Codex broker thread（Kimi 使用独立 provider transport）。
 

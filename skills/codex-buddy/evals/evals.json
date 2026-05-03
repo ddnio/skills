@@ -191,6 +191,14 @@
       "expected_reply": "V2[METHOD] | sandbox recovery 会影响用户执行体验。\n先改用 file-first evidence、local evidence，或缩小成 read-only 证据包。只有用户请求的验证确实需要写入、联网或破坏性权限时，才一次性说明并请求授权。",
       "assertions": { "vlevel_required": true, "must_use_file_first": true, "must_not_request_approval_first": true },
       "tags": ["sandbox-approval", "low-intrusion-recovery", "boundary-stop", "v-level-header"]
+    },
+    {
+      "id": 31,
+      "prompt": "针对 codex-buddy/Kimi provider 这个问题，再想想最佳优化方案",
+      "expected_output": "回复开头标注 V2[META]；这是本 skill/provider/触发机制设计，必须先 route 到 buddy/Codex probe，再结合本地证据制定方案",
+      "expected_reply": "V2[META] | 这是 codex-buddy/Kimi/provider 机制设计。\n先 route 到 buddy/Codex probe，并结合本地日志、测试和安装态证据后再制定方案。",
+      "assertions": { "vlevel_required": true, "must_probe": true },
+      "tags": ["should-trigger", "probe", "meta", "planning", "v-level-header"]
     }
   ]
 }

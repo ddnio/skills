@@ -32,7 +32,7 @@ import { appendLog, getCallCount } from './lib/audit.mjs';
 import { parseAnnotationFlags, ANNOTATION_FLAG_MAP } from './lib/annotations.mjs';
 import { assessReply } from './lib/reply-assessor.mjs';
 import { getStats } from './lib/metrics.mjs';
-import { appendSessionEvent, readSessionEvents, newVerificationTaskId } from './lib/session-log.mjs';
+import { appendSessionEvent, readSessionEvents, newVerificationTaskId, getSessionLogPath } from './lib/session-log.mjs';
 import { getBuddyHome } from './lib/paths.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -123,6 +123,12 @@ function createProviderProgressReporter({ buddySessionId, verificationTaskId, pr
   const stats = {
     contentChunks: 0,
     contentChars: 0,
+    thinkingChunks: 0,
+    thinkingChars: 0,
+    statusEvents: 0,
+    toolEvents: 0,
+    protocolEvents: 0,
+    otherEvents: 0,
     eventCount: 0,
     lastAt: null,
     lastSubtype: null,
@@ -141,6 +147,17 @@ function createProviderProgressReporter({ buddySessionId, verificationTaskId, pr
       if (event?.subtype === 'kimi/content') {
         stats.contentChunks += 1;
         stats.contentChars += String(event.payload?.text || '').length;
+      } else if (event?.subtype === 'kimi/thinking') {
+        stats.thinkingChunks += 1;
+        stats.thinkingChars += String(event.payload?.thinking || '').length;
+      } else if (event?.subtype === 'kimi/status') {
+        stats.statusEvents += 1;
+      } else if (event?.subtype === 'kimi/tool' || event?.subtype === 'kimi/request_rejected') {
+        stats.toolEvents += 1;
+      } else if (event?.subtype === 'kimi/protocol') {
+        stats.protocolEvents += 1;
+      } else {
+        stats.otherEvents += 1;
       }
 
       if (now < stats.nextReportAt) return;
@@ -151,14 +168,52 @@ function createProviderProgressReporter({ buddySessionId, verificationTaskId, pr
         events_count: stats.eventCount,
         content_chunks: stats.contentChunks,
         content_chars: stats.contentChars,
+        thinking_chunks: stats.thinkingChunks,
+        thinking_chars: stats.thinkingChars,
+        status_events: stats.statusEvents,
+        tool_events: stats.toolEvents,
+        protocol_events: stats.protocolEvents,
+        other_events: stats.otherEvents,
         last_event_subtype: stats.lastSubtype,
         last_raw_type: stats.lastRawType,
         elapsed_s: elapsed,
       });
       process.stderr.write(
-        `[buddy] ${provider} streaming: chunks=${stats.contentChunks}, chars=${stats.contentChars}, elapsed=${elapsed}s\n`,
+        `[buddy] ${provider} streaming: chunks=${stats.contentChunks}, chars=${stats.contentChars}, thinking=${stats.thinkingChars}, elapsed=${elapsed}s\n`,
       );
     },
+  };
+}
+
+function writeCompletionMarkerBestEffort(markerPath, payload) {
+  if (!markerPath || markerPath === 'true') return false;
+  try {
+    const dir = path.dirname(markerPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = path.join(dir, `.${path.basename(markerPath)}.${process.pid}.${Date.now()}.tmp`);
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, markerPath);
+    return true;
+  } catch (e) {
+    process.stderr.write(`[buddy] warning: completion marker write failed (${e.message.split('\n')[0]})\n`);
+    return false;
+  }
+}
+
+function buildCompletionPayload({ buddySessionId, verificationTaskId, provider, transport = null, runtime = null, finalState, startedAt, exitCode = null, rule = null, message = null }) {
+  return {
+    session_id: buddySessionId,
+    verification_task_id: verificationTaskId,
+    final_state: finalState,
+    provider,
+    transport,
+    runtime,
+    rule,
+    message,
+    exit_code: exitCode,
+    duration_ms: Date.now() - startedAt,
+    completed_at: new Date().toISOString(),
+    session_log_path: getSessionLogPath(buddySessionId),
   };
 }
 
@@ -415,7 +470,22 @@ async function actionProbe(args) {
       parser_version: turn.parserVersion,
       exit_code: turn.exitCode,
       events_count: (turn.events || []).length,
+      progress_stats: turn.progress || progress.stats,
     }, providerOutput);
+
+    const completedPayload = buildCompletionPayload({
+      buddySessionId,
+      verificationTaskId,
+      provider: turn.provider,
+      transport: turn.transport,
+      runtime: turn.runtime,
+      finalState: 'completed',
+      startedAt: startTime,
+      exitCode: turn.exitCode ?? 0,
+      rule: envelope.rule,
+    });
+    appendSessionEventBestEffort(buddySessionId, verificationTaskId, 'probe.completed', completedPayload);
+    writeCompletionMarkerBestEffort(args['completion-marker'], completedPayload);
 
     process.stderr.write(`[buddy] probe completed in ${latencyMs}ms, verdict=${kimiVerdict?.verdict || parsed.data?.verdict || parsed.mode}\n`);
 
@@ -451,6 +521,7 @@ async function actionProbe(args) {
       parse_status: turn.parseStatus,
       fallback: turn.fallback,
       events_count: (turn.events || []).length,
+      progress_stats: turn.progress || progress.stats,
       verdict: kimiVerdict?.verdict || parsed.data?.verdict || null,
       review_status: kimiVerdict?.reviewStatus || null,
       structured: parsed.data,
@@ -466,9 +537,28 @@ async function actionProbe(args) {
       events_count: progressStats.eventCount,
       content_chunks: progressStats.contentChunks,
       content_chars: progressStats.contentChars,
+      thinking_chunks: progressStats.thinkingChunks,
+      thinking_chars: progressStats.thinkingChars,
+      status_events: progressStats.statusEvents,
+      tool_events: progressStats.toolEvents,
+      protocol_events: progressStats.protocolEvents,
+      other_events: progressStats.otherEvents,
       last_event_subtype: progressStats.lastSubtype,
       last_raw_type: progressStats.lastRawType,
     });
+    const finalState = e.recoverable === true ? 'recoverable_error' : 'error';
+    const completedPayload = buildCompletionPayload({
+      buddySessionId,
+      verificationTaskId,
+      provider: buddyModel,
+      finalState,
+      startedAt: startTime,
+      exitCode: 1,
+      rule: e.code || `${buddyModel}-failed`,
+      message: `${e.message.split('\n')[0]}${progressMessage}`,
+    });
+    appendSessionEventBestEffort(buddySessionId, verificationTaskId, 'probe.completed', completedPayload);
+    writeCompletionMarkerBestEffort(args['completion-marker'], completedPayload);
     output({
       status: 'error',
       rule: e.code || `${buddyModel}-failed`,
@@ -480,6 +570,12 @@ async function actionProbe(args) {
         streamed_events: progressStats.eventCount,
         content_chunks: progressStats.contentChunks,
         content_chars: progressStats.contentChars,
+        thinking_chunks: progressStats.thinkingChunks,
+        thinking_chars: progressStats.thinkingChars,
+        status_events: progressStats.statusEvents,
+        tool_events: progressStats.toolEvents,
+        protocol_events: progressStats.protocolEvents,
+        other_events: progressStats.otherEvents,
         last_event_subtype: progressStats.lastSubtype,
         last_raw_type: progressStats.lastRawType,
       } : {}),
@@ -749,6 +845,81 @@ async function actionReplay(args) {
   output({ status: 'ok', session_id: buddySessionId, events_count: events.length, events });
 }
 
+async function actionStatus(args) {
+  const buddySessionId = args['session-id'] || loadBuddySession(args['project-dir'] ? { cwd: args['project-dir'] } : {});
+  if (!buddySessionId) {
+    output({ status: 'error', message: 'No buddy session ID. Pass --session-id <id>.' });
+    return;
+  }
+  const events = readSessionEvents(buddySessionId)
+    .filter((event) => !args['verification-task-id'] || event.verification_task_id === args['verification-task-id']);
+  const latest = (eventName) => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].event === eventName) return events[i];
+    }
+    return null;
+  };
+  const completed = latest('probe.completed');
+  const outputEvent = latest('probe.provider_output');
+  const errorEvent = latest('probe.error');
+  const startEvent = latest('probe.start');
+  const taskId = completed?.verification_task_id || outputEvent?.verification_task_id || errorEvent?.verification_task_id || startEvent?.verification_task_id || args['verification-task-id'] || null;
+
+  if (completed) {
+    output({
+      status: 'ok',
+      session_id: buddySessionId,
+      verification_task_id: taskId,
+      final_state: completed.final_state || 'completed',
+      host_state: 'completed',
+      provider: completed.provider || outputEvent?.provider || startEvent?.provider || null,
+      transport: completed.transport || outputEvent?.transport || null,
+      runtime: completed.runtime || outputEvent?.runtime || null,
+      rule: completed.rule || startEvent?.rule || null,
+      message: completed.message || null,
+      completed_at: completed.completed_at || completed.ts,
+      duration_ms: completed.duration_ms ?? outputEvent?.latency_ms ?? null,
+      exit_code: completed.exit_code ?? null,
+      session_log_path: completed.session_log_path || getSessionLogPath(buddySessionId),
+      events_count: events.length,
+    });
+    return;
+  }
+
+  if (outputEvent || errorEvent || startEvent) {
+    const finalState = outputEvent ? 'legacy_completed' : (errorEvent ? 'error' : 'running');
+    output({
+      status: 'ok',
+      session_id: buddySessionId,
+      verification_task_id: taskId,
+      final_state: finalState,
+      host_state: finalState,
+      provider: outputEvent?.provider || errorEvent?.provider || startEvent?.provider || null,
+      transport: outputEvent?.transport || null,
+      runtime: outputEvent?.runtime || null,
+      rule: outputEvent?.rule || startEvent?.rule || null,
+      message: errorEvent?.message || null,
+      completed_at: outputEvent?.ts || errorEvent?.ts || null,
+      started_at: startEvent?.ts || null,
+      duration_ms: outputEvent?.latency_ms ?? null,
+      exit_code: outputEvent?.exit_code ?? (errorEvent ? 1 : null),
+      session_log_path: getSessionLogPath(buddySessionId),
+      events_count: events.length,
+    });
+    return;
+  }
+
+  output({
+    status: 'ok',
+    session_id: buddySessionId,
+    verification_task_id: args['verification-task-id'] || null,
+    final_state: 'unknown',
+    host_state: 'unknown',
+    session_log_path: getSessionLogPath(buddySessionId),
+    events_count: events.length,
+  });
+}
+
 async function actionMetrics(args) {
   const stats = getStats(logFilePath(), args['session-id'] || null);
   output({ status: 'ok', ...stats });
@@ -814,6 +985,9 @@ async function main() {
       break;
     case 'replay':
       await actionReplay(args);
+      break;
+    case 'status':
+      await actionStatus(args);
       break;
     default:
       output({ status: 'error', message: `Unknown action: ${args.action}` });

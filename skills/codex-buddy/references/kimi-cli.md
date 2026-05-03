@@ -19,6 +19,10 @@ BUDDY_EVIDENCE_END
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" \
   --action probe --buddy-model kimi --evidence "$EVIDENCE_FILE" --project-dir "$PWD"
 
+# Read authoritative task status if the host terminal still appears to wait
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action status \
+  --session-id buddy-xxxxxx --verification-task-id vtask-xxxx
+
 # Preflight check (verify Kimi is available)
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action preflight --buddy-model kimi
 
@@ -118,7 +122,9 @@ To resume this session: kimi -r <uuid>
 **buddy-runtime handling:**
 - Wire final prompt text → used as synthesis content (equivalent to Codex final message)
 - Wire `event` notifications → written to `~/.buddy/sessions/<sid>.jsonl` as `probe.provider_event`
-- Wire timeout / empty final output / permission failure → fail-closed; not a passed review
+- Wire timeout / thinking-only / empty final output / permission failure → fail-closed; not a passed review
+- Wire thinking-only → `kimi-wire-thinking-only` recoverable error; it proves Kimi is active, but not that a review result exists
+- Probe completion → written as `probe.completed`; optional `--completion-marker <file>` writes an atomic JSON marker for host integrations
 - Legacy quiet stdout → used as synthesis content when `BUDDY_KIMI_TRANSPORT=exec` or Wire falls back
 - Legacy `ThinkPart.think` → written to `~/.buddy/sessions/<sid>.jsonl` as `probe.provider_think` event (audit, not shown in synthesis)
 - Legacy `TextPart.text` → used as synthesis content when quiet final output is not available

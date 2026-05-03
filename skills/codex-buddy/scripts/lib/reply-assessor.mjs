@@ -18,7 +18,7 @@ export function assessReply({ prompt = '', reply = '', assertions = {} } = {}) {
     violations.push(violation('missing-vlevel-header', 'Reply must start with a V-level header.'));
   }
 
-  if (assertions.must_probe && !hasAny(text, [/\bprobe\b/i, /\bCodex\b/, /\bbuddy\b/i, /独立/, /验证/])) {
+  if (assertions.must_probe && !hasAny(text, [/\bprobe\b/i, /\bCodex\b/, /\bbuddy\b/i, /buddy\/Codex/i, /独立.*(?:审查|检查|验证|意见)/, /route.*(?:buddy|Codex|probe)/i])) {
     violations.push(violation('missing-probe', 'Reply must route to buddy/Codex probe or cite probe evidence.'));
   }
 

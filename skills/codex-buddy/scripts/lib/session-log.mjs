@@ -34,6 +34,10 @@ function sessionFile(buddySessionId) {
   return path.join(sessionDir(), `${buddySessionId}.jsonl`);
 }
 
+export function getSessionLogPath(buddySessionId) {
+  return sessionFile(buddySessionId);
+}
+
 function ensureDir() {
   const dir = sessionDir();
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

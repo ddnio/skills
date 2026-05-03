@@ -209,6 +209,53 @@ rl.on('line', (line) => {
   }
 });
 
+test('runKimiWireTurn reports thinking-only progress separately from review text', async () => {
+  const marker = path.join(os.tmpdir(), `kimi-wire-thinking-cancel-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
+  const fakeKimi = fakeWireScript(`
+import fs from 'node:fs';
+import readline from 'node:readline';
+const marker = ${JSON.stringify(marker)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+let interval = null;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'prompt') {
+    interval = setInterval(() => {
+      send({ jsonrpc: '2.0', method: 'event', params: { type: 'ThinkingPart', payload: { think: 'still reasoning' } } });
+    }, 5);
+  }
+  if (msg.method === 'cancel') {
+    clearInterval(interval);
+    fs.writeFileSync(marker, 'cancelled');
+    send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } });
+  }
+});
+`);
+  try {
+    await assert.rejects(
+      () => withFakeKimi(fakeKimi, () => runKimiWireTurn('hello', {
+        projectDir: '/tmp',
+        timeoutMs: 1000,
+        noContentTimeoutMs: 50,
+        killGraceMs: 20,
+      })),
+      (err) => err.code === 'kimi-wire-thinking-only'
+        && err.recoverable === true
+        && /thinking/i.test(err.message)
+        && err.thinkingChunks > 0
+        && err.thinkingChars > 0
+        && err.contentChars === 0
+        && err.lastSubtype === 'kimi/thinking',
+    );
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'cancelled');
+  } finally {
+    fs.rmSync(fakeKimi, { force: true });
+    fs.rmSync(marker, { force: true });
+  }
+});
+
 test('runKimiWireTurn does not fail no-content timer after review text arrives', async () => {
   const fakeKimi = fakeWireScript(`
 import readline from 'node:readline';

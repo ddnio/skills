@@ -18,6 +18,12 @@ export async function runKimiWireTurn(prompt, opts = {}) {
     eventsCount: 0,
     contentChunks: 0,
     contentChars: 0,
+    thinkingChunks: 0,
+    thinkingChars: 0,
+    statusEvents: 0,
+    toolEvents: 0,
+    protocolEvents: 0,
+    otherEvents: 0,
     lastSubtype: null,
     lastRawType: null,
   };
@@ -115,6 +121,7 @@ export async function runKimiWireTurn(prompt, opts = {}) {
       initialized,
       latencyMs: Date.now() - startedAt,
       events,
+      progress: { ...progress },
     };
   } finally {
     client.close();
@@ -256,9 +263,18 @@ function normalizeWireEvent(params) {
       payload: { text, raw_type: type || null },
     };
   }
+  const thinking = extractThinking(payload);
+  if (thinking) {
+    return {
+      type: 'provider_event',
+      subtype: 'kimi/thinking',
+      payload: { thinking, raw_type: type || null },
+    };
+  }
+  const subtype = classifyWireSubtype(type, payload);
   return {
     type: 'provider_event',
-    subtype: 'kimi/event',
+    subtype,
     payload: { raw_type: type || null, event: payload },
   };
 }
@@ -277,6 +293,26 @@ function extractText(value) {
   return '';
 }
 
+function extractThinking(value) {
+  if (!value || typeof value === 'string') return '';
+  for (const key of ['think', 'thinking', 'reasoning']) {
+    if (typeof value[key] === 'string') return value[key];
+  }
+  const parts = value.parts || value.content || value.messages;
+  if (Array.isArray(parts)) {
+    return parts.map(extractThinking).filter(Boolean).join('\n\n');
+  }
+  return '';
+}
+
+function classifyWireSubtype(type, payload) {
+  const rawType = String(type || payload?.type || payload?.kind || payload?.name || '');
+  if (/status/i.test(rawType)) return 'kimi/status';
+  if (/tool|approval|request/i.test(rawType)) return 'kimi/tool';
+  if (/turn|session|protocol|begin|end/i.test(rawType)) return 'kimi/protocol';
+  return 'kimi/event';
+}
+
 function notifyEvent(handler, event) {
   if (typeof handler !== 'function') return;
   try { handler(event); } catch {}
@@ -289,6 +325,17 @@ function recordWireProgress(progress, event) {
   if (event?.subtype === 'kimi/content') {
     progress.contentChunks += 1;
     progress.contentChars += String(event.payload?.text || '').length;
+  } else if (event?.subtype === 'kimi/thinking') {
+    progress.thinkingChunks += 1;
+    progress.thinkingChars += String(event.payload?.thinking || '').length;
+  } else if (event?.subtype === 'kimi/status') {
+    progress.statusEvents += 1;
+  } else if (event?.subtype === 'kimi/tool' || event?.subtype === 'kimi/request_rejected') {
+    progress.toolEvents += 1;
+  } else if (event?.subtype === 'kimi/protocol') {
+    progress.protocolEvents += 1;
+  } else {
+    progress.otherEvents += 1;
   }
 }
 
@@ -372,15 +419,26 @@ function requestWithCancelTimeout({
         if ((progress?.contentChars || 0) > 0) return;
         clearTimeout(totalTimer);
         await onNoContentTimeout();
+        const thinkingOnly = (progress?.thinkingChars || 0) > 0;
         reject(Object.assign(
-          new Error(`Kimi wire emitted ${progress?.eventsCount || 0} events but no review text after ${noContentTimeoutMs}ms`),
+          new Error(thinkingOnly
+            ? `Kimi wire emitted thinking but no review text after ${noContentTimeoutMs}ms`
+            : `Kimi wire emitted ${progress?.eventsCount || 0} events but no review text after ${noContentTimeoutMs}ms`),
           {
-            code: 'kimi-wire-no-progress',
+            code: thinkingOnly ? 'kimi-wire-thinking-only' : 'kimi-wire-no-progress',
             recoverable: true,
-            recoveryHint: 'Kimi wire emitted provider events but no review text. Treat this review as inconclusive, retry Kimi later, or run the same evidence with --buddy-model codex.',
+            recoveryHint: thinkingOnly
+              ? 'Kimi wire emitted thinking but no final review text. Treat this review as inconclusive, retry Kimi later, or run the same evidence with --buddy-model codex.'
+              : 'Kimi wire emitted provider events but no review text. Treat this review as inconclusive, retry Kimi later, or run the same evidence with --buddy-model codex.',
             eventsCount: progress?.eventsCount || 0,
             contentChunks: progress?.contentChunks || 0,
             contentChars: progress?.contentChars || 0,
+            thinkingChunks: progress?.thinkingChunks || 0,
+            thinkingChars: progress?.thinkingChars || 0,
+            statusEvents: progress?.statusEvents || 0,
+            toolEvents: progress?.toolEvents || 0,
+            protocolEvents: progress?.protocolEvents || 0,
+            otherEvents: progress?.otherEvents || 0,
             lastSubtype: progress?.lastSubtype || null,
             lastRawType: progress?.lastRawType || null,
             noContentTimeoutMs,
