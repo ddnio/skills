@@ -4,6 +4,20 @@
 
 ---
 
+## v3.3.1 — 2026-05-03 Patch-only version gate
+
+### Content
+- **`STATUS.md`**：修正 `skill_version` 与最新 changelog 版本不一致的问题，并登记 W-019。
+- **`verify-repo.sh`**：新增版本一致性 gate，检查 `STATUS.md` 的 `skill_version`、`last_round_notes` 与 CHANGELOG 最新版本一致。
+- **`verify-repo.sh`**：新增 patch-only 版本递增检查；未来更新只能递增第三位版本号。
+- **`verify-repo.sh`**：要求 `last_round_notes` 以最新版本号开头，避免先提旧版本导致规则歧义。
+
+### 架构决策
+- codex-buddy 后续版本只允许 patch 位递增，例如 `v3.3.1 → v3.3.2`；不再使用中版本或大版本升级来表达普通迭代。
+- 版本漂移属于工具交付问题，必须由 gate 捕获，不能靠人工记忆。
+
+---
+
 ## v3.3.0 — 2026-05-03 Replayable active-buddy evals
 
 ### Content

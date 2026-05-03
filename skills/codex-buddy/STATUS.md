@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.2.2
+v3.3.1
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -68,6 +68,15 @@ HEALTHY
   done_when: "evals include replayable trigger/verification-quality cases; command output reports pass/fail counts for those cases"
   status: done
 
+- id: W-019
+  type: fix
+  title: trigger hardening state consistency
+  source: user feedback 2026-05-03: future updates must only increment patch version; do not leave known tooling friction unresolved
+  impact: high
+  reversibility: safe
+  done_when: "verify-repo fails on STATUS/CHANGELOG version drift and enforces patch-only version increments"
+  status: done
+
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
 NONE
@@ -88,7 +97,7 @@ NONE
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-W-018 landed as the first replayable evaluation loop: evals can now carry machine-checkable assertions, replay-evals reports pass/fail counts, and verify-repo gates on asserted coverage.
+W-019 closes the state/version drift found after W-018 and makes future version updates patch-only by gate.
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->
@@ -103,4 +112,4 @@ NONE
 FIXED
 
 ## last_round_notes
-v3.3.0: W-018 replayable evaluation loop landed. Added assess-reply runtime checks, replay-evals runner, machine-checkable eval assertions for key active-buddy scenarios, and verify-repo gating on replay eval coverage. Runtime tests, reply-assessor tests, replay-evals tests, and verify-repo passed locally.
+v3.3.1: W-019 trigger hardening state consistency landed. verify-repo now checks STATUS/CHANGELOG version drift and enforces patch-only version increments; STATUS skill_version now matches the latest CHANGELOG entry.
