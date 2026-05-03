@@ -211,7 +211,48 @@ else
 fi
 echo ""
 
-# ── 9. 独立发现落地检查 ───────────────────────────────────────
+# ── 9. 版本一致性 ─────────────────────────────────────────────
+echo "── 版本一致性 ──"
+LATEST_VERSION=$(grep -m1 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+' "$SKILL_DIR/CHANGELOG.md" | awk '{print $2}')
+STATUS_VERSION=$(sed -n '/^## skill_version/,/^## /{ /^#/d; /^$/d; /^<!--/d; p; }' "$STATUS_FILE" | head -1 | tr -d '[:space:]')
+LAST_NOTES_LINE=$(sed -n '/^## last_round_notes/,/^## /{ /^#/d; /^$/d; /^<!--/d; p; }' "$STATUS_FILE" | head -1 | sed 's/^[[:space:]]*//')
+
+if [ -z "$LATEST_VERSION" ]; then
+  fail "CHANGELOG 缺少最新版本标题（格式: ## vX.Y.Z）"
+else
+  pass "CHANGELOG 最新版本: $LATEST_VERSION"
+fi
+
+if [ -n "$LATEST_VERSION" ] && [ "$STATUS_VERSION" = "$LATEST_VERSION" ]; then
+  pass "STATUS skill_version 与 CHANGELOG 一致 ($STATUS_VERSION)"
+else
+  fail "STATUS skill_version ($STATUS_VERSION) 与 CHANGELOG 最新版本 ($LATEST_VERSION) 不一致"
+fi
+
+if [ -n "$LATEST_VERSION" ] && [[ "$LAST_NOTES_LINE" == "$LATEST_VERSION"* ]]; then
+  pass "last_round_notes 以 CHANGELOG 最新版本开头 ($LATEST_VERSION)"
+else
+  fail "last_round_notes 必须以 CHANGELOG 最新版本开头 ($LATEST_VERSION)"
+fi
+
+PREV_VERSION=$(grep -m2 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+' "$SKILL_DIR/CHANGELOG.md" | tail -1 | awk '{print $2}')
+if [ -n "$LATEST_VERSION" ] && [ -n "$PREV_VERSION" ]; then
+  VERSION_CHECK=$(node - "$LATEST_VERSION" "$PREV_VERSION" <<'NODE'
+const latest = process.argv[2].slice(1).split('.').map(Number);
+const prev = process.argv[3].slice(1).split('.').map(Number);
+const ok = latest[0] === prev[0] && latest[1] === prev[1] && latest[2] === prev[2] + 1;
+process.stdout.write(ok ? 'ok' : 'bad');
+NODE
+)
+  if [ "$VERSION_CHECK" = "ok" ]; then
+    pass "版本递增遵守 patch-only 规则 ($PREV_VERSION → $LATEST_VERSION)"
+  else
+    fail "版本递增必须只升第三位 patch ($PREV_VERSION → $LATEST_VERSION)"
+  fi
+fi
+echo ""
+
+# ── 10. 独立发现落地检查 ───────────────────────────────────────
 echo "── 独立发现落地检查 ──"
 # CHANGELOG 中"登记为后续改进"或"unresolved"的标记，必须有对应 work_queue 条目或已关闭
 UNRESOLVED_COUNT=$(grep -c 'unresolved' "$SKILL_DIR/CHANGELOG.md" 2>/dev/null || true)
@@ -250,7 +291,7 @@ else
 fi
 echo ""
 
-# ── 10. done_when 主观词汇检查 ───────────────────────────────
+# ── 11. done_when 主观词汇检查 ───────────────────────────────
 echo "── done_when 主观词汇检查 ──"
 if grep -q "done_when" "$SKILL_DIR/STATUS.md"; then
   if grep -A1 "done_when" "$SKILL_DIR/STATUS.md" | grep -qE 'AI 判断|感觉|认为|满意|觉得'; then
@@ -263,7 +304,7 @@ else
 fi
 echo ""
 
-# ── 11. marketplace.json 一致性 ──────────────────────────────
+# ── 12. marketplace.json 一致性 ──────────────────────────────
 echo "── marketplace.json 一致性 ──"
 MARKETPLACE="$REPO_ROOT/.claude-plugin/marketplace.json"
 if [ -f "$MARKETPLACE" ]; then
@@ -314,7 +355,7 @@ if [ -f "$MARKETPLACE" ]; then
 fi
 echo ""
 
-# ── 12. v3 Runtime 文件存在性 ─────────────────────────────────
+# ── 13. v3 Runtime 文件存在性 ─────────────────────────────────
 echo "── v3 Runtime 文件 ──"
 V3_FILES=(
   "scripts/buddy-runtime.mjs"

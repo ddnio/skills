@@ -888,6 +888,157 @@ rl.on('line', (line) => {
     }
   });
 
+  test('--action probe with kimi reports no-progress recovery details', () => {
+    const evidence = path.join(os.tmpdir(), `kimi-no-progress-runtime-${Date.now()}.txt`);
+    const fakeKimi = path.join(os.tmpdir(), `fake-kimi-no-progress-runtime-${Date.now()}.mjs`);
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-kimi-no-progress-runtime-'));
+    fs.writeFileSync(evidence, 'task_to_judge: kimi no progress\nraw_evidence: x\nknown_omissions: none\n');
+    fs.writeFileSync(fakeKimi, `#!/usr/bin/env node
+import fs from 'node:fs';
+import readline from 'node:readline';
+if (process.argv.includes('--version')) {
+  console.log('kimi, version fake');
+  process.exit(0);
+}
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + '\\n'); }
+let interval = null;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') send({ jsonrpc: '2.0', id: msg.id, result: {} });
+  if (msg.method === 'prompt') {
+    interval = setInterval(() => {
+      send({ jsonrpc: '2.0', method: 'event', params: { type: 'ContentPart', payload: { type: 'tool_call', name: 'noop' } } });
+    }, 5);
+  }
+  if (msg.method === 'cancel') {
+    clearInterval(interval);
+    send({ jsonrpc: '2.0', id: msg.id, result: { ok: true } });
+  }
+});
+`);
+    fs.chmodSync(fakeKimi, 0o755);
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'probe', '--buddy-model', 'kimi',
+         '--evidence', evidence, '--project-dir', '/tmp', '--session-id', `kimi-no-progress-${Date.now()}`],
+        {
+          encoding: 'utf8',
+          timeout: 10000,
+          env: {
+            ...process.env,
+            BUDDY_KIMI_BIN: fakeKimi,
+            BUDDY_KIMI_NO_CONTENT_TIMEOUT_MS: '50',
+            BUDDY_HOME: tmpHome,
+          },
+        },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'error', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.rule, 'kimi-wire-no-progress');
+      assert.equal(json.recoverable, true);
+      assert.match(json.recovery_hint, /--buddy-model codex|retry Kimi/i);
+      assert.match(json.message, /no review text/);
+      assert.equal(json.content_chars, 0);
+      assert.ok(json.streamed_events > 0);
+      assert.equal(json.last_raw_type, 'ContentPart');
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(fakeKimi, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('--action probe writes completion marker and status reads completed state', () => {
+    const evidence = path.join(os.tmpdir(), `completion-marker-${Date.now()}.txt`);
+    const marker = path.join(os.tmpdir(), `completion-marker-${Date.now()}.json`);
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-completion-marker-'));
+    const sid = `completion-marker-${Date.now()}`;
+    fs.writeFileSync(evidence, 'task_to_judge: completion marker\nraw_evidence: x\nknown_omissions: none\n');
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'probe', '--evidence', evidence, '--project-dir', '/tmp',
+         '--session-id', sid, '--completion-marker', marker],
+        {
+          encoding: 'utf8',
+          timeout: 10000,
+          env: {
+            ...process.env,
+            BUDDY_HOME: tmpHome,
+            BUDDY_STUB_CODEX: '1',
+            BUDDY_USE_LEGACY_EXEC: '1',
+          },
+        },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'verified', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(fs.existsSync(marker), true);
+      const markerJson = JSON.parse(fs.readFileSync(marker, 'utf8'));
+      assert.equal(markerJson.final_state, 'completed');
+      assert.equal(markerJson.exit_code, 0);
+      assert.equal(markerJson.provider, 'codex');
+      assert.equal(markerJson.session_id, sid);
+      assert.equal(markerJson.verification_task_id, json.verification_task_id);
+      assert.match(markerJson.session_log_path, /sessions\/completion-marker-.*\.jsonl$/);
+      assert.ok(markerJson.duration_ms >= 0);
+      assert.match(markerJson.completed_at, /^\d{4}-\d{2}-\d{2}T/);
+
+      const statusRun = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'status', '--project-dir', '/tmp', '--session-id', sid,
+         '--verification-task-id', json.verification_task_id],
+        { encoding: 'utf8', timeout: 10000, env: { ...process.env, BUDDY_HOME: tmpHome } },
+      );
+      const statusJson = JSON.parse(statusRun.stdout);
+      assert.equal(statusJson.status, 'ok', `stdout=${statusRun.stdout} stderr=${statusRun.stderr}`);
+      assert.equal(statusJson.final_state, 'completed');
+      assert.equal(statusJson.host_state, 'completed');
+      assert.equal(statusJson.verification_task_id, json.verification_task_id);
+      assert.equal(statusJson.provider, 'codex');
+    } finally {
+      fs.rmSync(evidence, { force: true });
+      fs.rmSync(marker, { force: true });
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('--action status reports legacy provider_output without completed marker separately', async () => {
+    const { appendSessionEvent } = await import('../lib/session-log.mjs');
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'buddy-status-legacy-'));
+    const sid = `status-legacy-${Date.now()}`;
+    const taskId = 'vtask-status-legacy';
+    const prevHome = process.env.BUDDY_HOME;
+    try {
+      process.env.BUDDY_HOME = tmpHome;
+      appendSessionEvent(sid, taskId, 'probe.start', { provider: 'codex', rule: 'test' }, 'evidence');
+      appendSessionEvent(sid, taskId, 'probe.provider_output', {
+        provider: 'codex',
+        transport: 'exec',
+        runtime: 'exec',
+        latency_ms: 12,
+        exit_code: 0,
+      }, 'legacy output');
+
+      const r = spawnSync(
+        process.execPath,
+        [RUNTIME, '--action', 'status', '--project-dir', '/tmp', '--session-id', sid,
+         '--verification-task-id', taskId],
+        { encoding: 'utf8', timeout: 10000, env: { ...process.env, BUDDY_HOME: tmpHome } },
+      );
+      const json = JSON.parse(r.stdout);
+      assert.equal(json.status, 'ok', `stdout=${r.stdout} stderr=${r.stderr}`);
+      assert.equal(json.final_state, 'legacy_completed');
+      assert.equal(json.host_state, 'legacy_completed');
+      assert.equal(json.provider, 'codex');
+    } finally {
+      if (prevHome === undefined) delete process.env.BUDDY_HOME;
+      else process.env.BUDDY_HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   test('--action probe with kimi can force legacy exec transport', () => {
     const evidence = path.join(os.tmpdir(), `kimi-exec-runtime-${Date.now()}.txt`);
     const fakeKimi = path.join(os.tmpdir(), `fake-kimi-exec-runtime-${Date.now()}.mjs`);

@@ -4,6 +4,52 @@
 
 ---
 
+## v3.3.3 — 2026-05-03 Completion handshake and trigger hardening
+
+### Content
+- **`buddy-runtime.mjs`**：`probe` 成功、recoverable error、error 都写入 `probe.completed`，并支持 `--completion-marker <file>` 原子写入最终状态，避免宿主终端/UI stale 时无法判断真实完成态。
+- **`buddy-runtime.mjs`**：新增 `--action status`，从 `~/.buddy/sessions/<sid>.jsonl` 按 `verification_task_id` 读取 `completed|recoverable_error|error|running|legacy_completed|unknown`，把 session log 变成权威状态源。
+- **`kimi-wire-client.mjs`**：将 Wire event 细分为 `kimi/content`、`kimi/thinking`、`kimi/status`、`kimi/tool`、`kimi/protocol`；thinking-only 不再被当作 review text，返回 `kimi-wire-thinking-only` recoverable 诊断。
+- **`reply-assessor.mjs` / `evals.json`**：收紧 `must_probe`，仅泛泛写“验证”不算 buddy probe；新增 codex-buddy/Kimi/provider 最佳方案类 meta prompt，要求 V2[META] 并 route 到 buddy/Codex probe。
+
+### Evidence
+- 现场 `buddy-a492dd94` 对应任务约 70s 已完成 Kimi 输出，但宿主画面仍显示 waiting，说明需要 runtime 之外的 completion handshake/status reader。
+- Kimi review 曾出现 76s 才有首段内容的正常慢路径，因此 no-content 早停不能简单降得过低；v3.3.3 保持 90s 阈值，同时把 thinking-only 与 protocol-only 区分出来。
+
+### 架构决策
+- terminal/background UI 不是完成态权威；`probe.completed`、completion marker、`--action status` 才是主 agent 和宿主集成应读取的状态。
+- 关于本 skill、Kimi provider、触发机制、最佳方案的规划和取舍属于 V2[META]，必须先走 buddy/Codex 独立检查再定方案。
+
+## v3.3.2 — 2026-05-03 Kimi wire no-progress recovery
+
+### Content
+- **`kimi-wire-client.mjs`**：新增 Kimi Wire no-content 早停；当 provider 持续发送事件但 90s 内没有任何 review text 时，发送 `cancel` 并返回 `kimi-wire-no-progress`，不再等满 120s 总超时。
+- **`providers.mjs`**：新增 `BUDDY_KIMI_NO_CONTENT_TIMEOUT_MS` 测试/调参入口；`kimi-wire-no-progress` 仍按 fail-closed 处理，不静默 fallback 到 legacy exec。
+- **`buddy-runtime.mjs` 既有错误通道**：无进展错误通过 `recoverable=true`、`recovery_hint`、`streamed_events`、`content_chars`、`last_raw_type` 返回给主 agent，避免客户只看到“卡住/超时”。
+- **测试**：新增 Wire 无文本事件早停、文本到达后不误杀、provider 不 fallback、runtime recovery JSON 覆盖。
+
+### Evidence
+- 现场日志显示失败任务在 120s 内收到 4000+ 个 Kimi Wire 事件，但 `content_chunks=0`、`content_chars=0`、`last_raw_type=ContentPart`，最终只以总超时报错。
+- 对照成功任务约 70s 后开始出现 `kimi/content` 文本事件，说明 parser 能解析文本；失败根因是 provider 事件流长期无可用 review text，而不是本地完全收不到 Kimi 输出。
+
+### 架构决策
+- Kimi no-progress 是可恢复的 provider failure，不是通过、不自动降级、不让主 agent 无限等待；默认 90s 高于已知成功样本约 70s 的首段文本延迟，避免误杀慢但正常的 Kimi review。
+- 只要没有 review text，就不能算 review 结果；主 agent 应把本次 Kimi 结论标为 inconclusive，并改用 Codex provider、file/local evidence，或稍后重试 Kimi。
+
+## v3.3.1 — 2026-05-03 Patch-only version gate
+
+### Content
+- **`STATUS.md`**：修正 `skill_version` 与最新 changelog 版本不一致的问题，并登记 W-019。
+- **`verify-repo.sh`**：新增版本一致性 gate，检查 `STATUS.md` 的 `skill_version`、`last_round_notes` 与 CHANGELOG 最新版本一致。
+- **`verify-repo.sh`**：新增 patch-only 版本递增检查；未来更新只能递增第三位版本号。
+- **`verify-repo.sh`**：要求 `last_round_notes` 以最新版本号开头，避免先提旧版本导致规则歧义。
+
+### 架构决策
+- codex-buddy 后续版本只允许 patch 位递增，例如 `v3.3.1 → v3.3.2`；不再使用中版本或大版本升级来表达普通迭代。
+- 版本漂移属于工具交付问题，必须由 gate 捕获，不能靠人工记忆。
+
+---
+
 ## v3.3.0 — 2026-05-03 Replayable active-buddy evals
 
 ### Content

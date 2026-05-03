@@ -6,7 +6,7 @@
 ---
 
 ## skill_version
-v3.2.2
+v3.3.3
 
 ## health_status
 <!-- HEALTHY | NEEDS_TRIAGE | BLOCKED -->
@@ -15,10 +15,14 @@ HEALTHY
 ## confirmed_failures
 <!-- 格式: [F-ID] 描述 | 证据: <文件:行或讨论链接> | 状态: OPEN|FIXED -->
 [F-001] Kimi legacy/print-style review could produce empty output or protocol transcript that looked like a completed review | 证据: user screenshot 2026-05-02; skills/codex-buddy/scripts/lib/__tests__/kimi-wire-client.test.mjs | 状态: FIXED
+[F-002] Kimi Wire can stream thousands of non-text events for 120s while producing no review text, making the host agent appear blocked | 证据: ~/.buddy/sessions/buddy-a492dd94.jsonl vtask-mophbony-ac3a06af/vtask-mopgvkxk-cfc35552; skills/codex-buddy/scripts/lib/__tests__/kimi-wire-client.test.mjs | 状态: FIXED
+[F-003] Runtime can complete a Kimi/Codex probe while the host/background terminal still appears to be waiting | 证据: ~/.buddy/sessions/buddy-a492dd94.jsonl vtask-moplfy9y-a566c09b completed in ~70s while screenshot showed waiting; skills/codex-buddy/scripts/__tests__/buddy-runtime.test.mjs | 状态: FIXED
 
 ## root_cause_hypotheses
 <!-- 格式: [H-ID] 假设 | 对应失败: <F-ID> -->
 [H-001] Kimi CLI legacy output is not a stable review transport; empty final output and noisy transcript must be classified before runtime can claim review success | 对应失败: F-001
+[H-002] Kimi Wire no-text event streams are provider no-progress failures; waiting for total timeout hides the actual state and creates avoidable customer friction | 对应失败: F-002
+[H-003] Host/runtime desync lacked an authoritative completion handshake/status reader; meta planning prompts about codex-buddy/Kimi also needed machine-checkable probe-trigger coverage | 对应失败: F-003
 
 ## work_queue
 <!-- 统一待办队列。done_when 必须是可由命令/文件验证的条件，不能是主观判断 -->
@@ -68,6 +72,33 @@ HEALTHY
   done_when: "evals include replayable trigger/verification-quality cases; command output reports pass/fail counts for those cases"
   status: done
 
+- id: W-019
+  type: fix
+  title: trigger hardening state consistency
+  source: user feedback 2026-05-03: future updates must only increment patch version; do not leave known tooling friction unresolved
+  impact: high
+  reversibility: safe
+  done_when: "verify-repo fails on STATUS/CHANGELOG version drift and enforces patch-only version increments"
+  status: done
+
+- id: W-020
+  type: fix
+  title: Kimi wire no-progress recovery
+  source: user screenshot/logs 2026-05-03: Kimi wire probe streamed events for 120s with chunks=0 chars=0 and then timed out
+  impact: high
+  reversibility: safe
+  done_when: "fake Kimi wire streams non-text ContentPart events; runtime returns kimi-wire-no-progress with recoverable recovery_hint before total timeout; provider does not fallback to exec; default no-content timeout is at least 90000ms"
+  status: done
+
+- id: W-021
+  type: fix
+  title: completion handshake and meta trigger hardening
+  source: user screenshot/logs 2026-05-03: host UI kept waiting after runtime completion; user asked why方案制定没有直接触发 buddy
+  impact: high
+  reversibility: safe
+  done_when: "probe writes probe.completed and optional completion marker; --action status returns completed by verification_task_id; Kimi thinking-only returns kimi-wire-thinking-only; eval id 31 requires V2[META]+buddy/Codex probe"
+  status: done
+
 ## selected_item
 <!-- 由 AI 从 work_queue 推导；不再人工填写 -->
 NONE
@@ -88,7 +119,7 @@ NONE
 
 ## selection_rationale
 <!-- Claude + Codex 综合选题的理由（一句话） -->
-W-018 landed as the first replayable evaluation loop: evals can now carry machine-checkable assertions, replay-evals reports pass/fail counts, and verify-repo gates on asserted coverage.
+W-021 closes the host/runtime stale-waiting gap with an explicit completion handshake and prevents codex-buddy/Kimi meta planning prompts from bypassing buddy probe.
 
 ## operating_mode
 <!-- TRIAGE | ITERATE | VALIDATE | BLOCKED -->
@@ -103,4 +134,4 @@ NONE
 FIXED
 
 ## last_round_notes
-v3.3.0: W-018 replayable evaluation loop landed. Added assess-reply runtime checks, replay-evals runner, machine-checkable eval assertions for key active-buddy scenarios, and verify-repo gating on replay eval coverage. Runtime tests, reply-assessor tests, replay-evals tests, and verify-repo passed locally.
+v3.3.3: W-021 completion handshake and trigger hardening landed. Runtime now writes probe.completed plus optional completion markers, --action status reads authoritative task state, Kimi thinking-only is recoverable but not accepted as review text, and meta optimization prompts for codex-buddy/Kimi require buddy/Codex probe evidence.

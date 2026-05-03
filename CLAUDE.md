@@ -53,6 +53,7 @@ skills/                           ← 插件市场根目录
 
 ### 发布验证
 - push 前运行 `bash scripts/verify-repo.sh`（根级入口，当前转调 `skills/codex-buddy/scripts/verify-repo.sh`），全部 PASSED 才可 push
+- codex-buddy 版本只递增第三位 patch，例如 `v3.3.1 → v3.3.2`；不要使用中版本或大版本升级表达普通迭代
 - 发布新版本后必须从零环境验证：`/plugin marketplace add nana-fox/skills` → `/plugin install codex-buddy@nanafox-skills` → 确认只注册一个 skill、无 Plugin Errors
 
 ---

@@ -51,6 +51,15 @@ echo "$SYNTHESIS_TEXT" | node "<SKILL_DIR>/scripts/buddy-runtime.mjs" \
 
 # Replay 一次 buddy 会话的事件流
 node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action replay --session-id buddy-xxxxxx
+
+# Status：宿主/后台终端疑似卡住时读取权威完成态
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action status \
+  --session-id buddy-xxxxxx --verification-task-id vtask-xxxx
+
+# Completion marker：给宿主集成使用的原子完成标记
+node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action probe \
+  --evidence "$EVIDENCE_FILE" --project-dir "$PWD" \
+  --completion-marker ".omc/state/buddy-completion.json"
 ```
 
 **Provider / transport 语义：**
@@ -64,10 +73,11 @@ node "<SKILL_DIR>/scripts/buddy-runtime.mjs" --action replay --session-id buddy-
 - 出现 `stdin is a TTY` 或 `stdin produced empty evidence` 时，修正提示/调用为 file-first，不把失败归咎给用户。
 
 **会话事件日志：** runtime 自动把每次交互写入 `~/.buddy/sessions/<buddy-session-id>.jsonl`：
-- `probe.start` / `probe.provider_event` / `probe.provider_output` / `probe.synthesis` / `annotate` / `*.error`
+- `probe.start` / `probe.provider_event` / `probe.provider_output` / `probe.completed` / `probe.synthesis` / `annotate` / `*.error`
 - 每行含 `payload`（默认 redacted）+ `payload_sha256` + `payload_bytes` + `redaction_policy`
 - 大于 256KiB 的 payload 转 `payload_ref`（外部文件，路径 `~/.buddy/sessions/<sid>.payloads/`）
 - 文件日志只做审计和 replay；agent 间实时交流优先走 provider 协议/CLI stdout，不通过文件轮询。审计写入失败应降级为 warning，不阻塞 probe 主结果。
+- `--action status` 读取 `probe.completed` / `probe.provider_output` / `probe.error` / `probe.start` 并返回 `completed|recoverable_error|error|running|legacy_completed|unknown`；只有 `probe.completed` 产生的 `completed` 是 v3.3.3 权威完成态，旧 `provider_output` 回退态标为 `legacy_completed`。
 
 **敏感信息 / Redaction**：
 - 默认 redact 模式覆盖：OpenAI sk-/sk-proj-/sk-svcacct-、Anthropic sk-ant-、GitHub ghp_/gho_/github_pat_、AWS AKIA、Slack xox[abprs]-、Stripe rk_/sk_、JWT、`Authorization: Bearer/Basic/Token`、env-style key=value（api_key/token/password/access_token/refresh_token/client_secret 等）

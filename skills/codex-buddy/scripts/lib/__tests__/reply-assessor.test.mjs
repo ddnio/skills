@@ -37,6 +37,28 @@ describe('reply assessor', () => {
     assert.ok(result.violations.some(v => v.code === 'missing-probe'));
   });
 
+  test('fails meta optimization replies that skip buddy probe evidence', () => {
+    const result = assessReply({
+      prompt: '针对 codex-buddy 和 Kimi provider，再想想最佳方案怎么优化',
+      reply: 'V2[META] | 这是验证机制设计。\n最佳方案是补充提示规则和日志字段。',
+      assertions: { vlevel_required: true, must_probe: true },
+    });
+
+    assert.equal(result.status, 'failed');
+    assert.ok(result.violations.some(v => v.code === 'missing-probe'));
+  });
+
+  test('fails must_probe when reply only says route without buddy or Codex probe', () => {
+    const result = assessReply({
+      prompt: '针对 codex-buddy 和 Kimi provider，再想想最佳方案怎么优化',
+      reply: 'V2[META] | 这是机制设计。\nroute 选择需要优化，但先直接给方案。',
+      assertions: { vlevel_required: true, must_probe: true },
+    });
+
+    assert.equal(result.status, 'failed');
+    assert.ok(result.violations.some(v => v.code === 'missing-probe'));
+  });
+
   test('passes a low-intrusion sandbox recovery reply', () => {
     const result = assessReply({
       prompt: 'Codex probe 因为 sandbox 需要授权卡住了，怎么继续？',
